@@ -515,33 +515,39 @@ def call_groq(
     temperature: float = 0.7,
     max_tokens: int = 1024,
     top_p: float = 1.0,
-    frequency_penalty: float = 0.0,
-    presence_penalty: float = 0.0,
+    frequency_penalty: float = 0.0,   # NOTE: Groq ignores this (OpenAI-only); kept for UI parity
+    presence_penalty: float = 0.0,    # NOTE: Groq ignores this (OpenAI-only); kept for UI parity
     stop: list = None,
     stream: bool = False,
     seed: int = None,
 ) -> dict:
     """
     Wrapper around Groq API with full parameter exposure.
+    NOTE: Groq API does NOT support frequency_penalty / presence_penalty.
+    Those params are silently dropped to avoid 400/401 errors.
     Returns dict with: content, usage, latency, model, params_used
     """
+    if client is None:
+        return {"success": False, "error": "Cliente Groq no inicializado. Verifica tu API Key.", "latency": 0}
+
+    # Groq-supported params only (no frequency_penalty / presence_penalty)
     params = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "top_p": top_p,
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "top_p": float(top_p),
     }
     if stop:
         params["stop"] = stop
     if seed is not None:
-        params["seed"] = seed
+        params["seed"] = int(seed)
 
     t0 = time.perf_counter()
     try:
         response = client.chat.completions.create(**params)
         latency = time.perf_counter() - t0
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content or ""
         usage = {
             "prompt_tokens": response.usage.prompt_tokens,
             "completion_tokens": response.usage.completion_tokens,
@@ -560,7 +566,13 @@ def call_groq(
             "params": params,
         }
     except Exception as e:
-        return {"success": False, "error": str(e), "latency": time.perf_counter() - t0}
+        return {
+            "success": False,
+            "error": str(e),
+            "latency": time.perf_counter() - t0,
+            "content": "",
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
 
 
 def compute_tfidf_matrix(docs: list) -> tuple:
@@ -1963,14 +1975,22 @@ elif module == "⚡  LLM Lab — Parámetros":
             )
             st.markdown(explain_parameter("max_tokens"))
         
-        with st.expander("🔁 Frequency & Presence Penalty"):
+        with st.expander("🔁 Frequency & Presence Penalty (concepto — no soportado por Groq)"):
+            st.markdown("""
+            <div class="warn-box" style="font-size:0.8rem;">
+            ⚠️ <b>Nota pedagógica:</b> <code>frequency_penalty</code> y <code>presence_penalty</code>
+            son parámetros de la <b>API de OpenAI</b>. La API de Groq <b>no los soporta</b>
+            (los rechaza con error 400/401). Los sliders son solo para aprender la teoría;
+            los valores <b>NO se envían</b> en la llamada real a Groq.
+            </div>
+            """, unsafe_allow_html=True)
             freq_penalty = st.slider(
-                "frequency_penalty", -2.0, 2.0, 0.0, 0.1,
-                help="Penaliza tokens según cuántas veces aparecieron"
+                "frequency_penalty (conceptual, no enviado)", -2.0, 2.0, 0.0, 0.1,
+                help="SOLO EDUCATIVO — No enviado a Groq. Penaliza tokens según frecuencia"
             )
             pres_penalty = st.slider(
-                "presence_penalty", -2.0, 2.0, 0.0, 0.1,
-                help="Penaliza cualquier token que ya apareció (binario)"
+                "presence_penalty (conceptual, no enviado)", -2.0, 2.0, 0.0, 0.1,
+                help="SOLO EDUCATIVO — No enviado a Groq. Penaliza presencia binaria"
             )
             st.markdown(explain_parameter("frequency_penalty"))
         
@@ -2001,15 +2021,14 @@ elif module == "⚡  LLM Lab — Parámetros":
         <div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;
                     padding:0.8rem;margin-top:0.5rem;font-family:'JetBrains Mono',monospace;
                     font-size:0.72rem;color:#8b949e;">
-        <b style="color:#f0883e;">Configuración actual:</b><br>
+        <b style="color:#f0883e;">Configuración actual (enviada a Groq):</b><br>
         model: {selected_model}<br>
         temperature: {temperature}<br>
         top_p: {top_p}<br>
         max_tokens: {max_tokens}<br>
-        frequency_penalty: {freq_penalty}<br>
-        presence_penalty: {pres_penalty}<br>
         seed: {seed_val if use_seed else "None"}<br>
-        stop: {stop_seqs}
+        stop: {stop_seqs}<br>
+        <span style="color:#856404;">freq_penalty/pres_penalty: conceptual (no enviado)</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2062,8 +2081,7 @@ elif module == "⚡  LLM Lab — Parámetros":
                     temperature=temperature,
                     max_tokens=max_tokens,
                     top_p=top_p,
-                    frequency_penalty=freq_penalty,
-                    presence_penalty=pres_penalty,
+                    # frequency_penalty / presence_penalty NOT sent (Groq doesn't support them)
                     stop=stop_seqs,
                     seed=seed_val if use_seed else None,
                 )
@@ -2239,41 +2257,62 @@ elif module == "⚖️  Comparador de Modelos":
         
         progress.progress(1.0, text="✅ Comparación completada")
         
-        # Summary metrics
+        # Separate successful from failed
+        successful = {m: r for m, r in results_compare.items() if r.get("success")}
+        failed     = {m: r for m, r in results_compare.items() if not r.get("success")}
+
+        # ── Show errors for failed models ──
+        if failed:
+            st.markdown("### ⚠️ Errores")
+            for model, result in failed.items():
+                err_msg = result.get("error", "Error desconocido")
+                st.markdown(f"""
+                <div class="warn-box">
+                <b>❌ {GROQ_MODELS[model]['family']} ({GROQ_MODELS[model]['params']})</b><br>
+                <code style="font-size:0.8rem;">{err_msg}</code><br>
+                <span style="font-size:0.78rem;color:#8b949e;">
+                💡 Verifica que la API Key sea válida y que el modelo esté disponible en tu cuenta Groq.
+                </span>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if not successful:
+            st.error("Ningún modelo respondió correctamente. Verifica tu API Key en la barra lateral.")
+            st.stop()
+
+        # ── Summary metrics (only successful) ──
         st.markdown("### 📊 Métricas Comparativas")
-        metric_cols = st.columns(len(models_to_compare))
+        n_successful = len(successful)
+        metric_cols = st.columns(max(1, n_successful))
         
-        for col, (model, result) in zip(metric_cols, results_compare.items()):
+        for col, (model, result) in zip(metric_cols, successful.items()):
             with col:
                 model_color = GROQ_MODELS[model]["color"]
-                if result["success"]:
-                    st.markdown(f"""
-                    <div class="metric-card" style="border-color:{model_color};">
-                    <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{model_color};">
-                    {GROQ_MODELS[model]['family']}
-                    </div>
-                    <div class="metric-value" style="color:{model_color};font-size:1.3rem;">
-                    {result['latency']:.2f}s
-                    </div>
-                    <div class="metric-label">Latencia</div>
-                    <div style="margin-top:0.4rem;font-size:0.8rem;color:#8b949e;">
-                    ⚡ {result['tokens_per_sec']:.0f} tok/s<br>
-                    📤 {result['usage']['prompt_tokens']} prompt<br>
-                    📥 {result['usage']['completion_tokens']} output<br>
-                    🏁 {result['finish_reason']}
-                    </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.error(f"Error: {result.get('error', 'Unknown')[:50]}")
+                st.markdown(f"""
+                <div class="metric-card" style="border-color:{model_color};">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{model_color};">
+                {GROQ_MODELS[model]['family']}
+                </div>
+                <div class="metric-value" style="color:{model_color};font-size:1.3rem;">
+                {result['latency']:.2f}s
+                </div>
+                <div class="metric-label">Latencia</div>
+                <div style="margin-top:0.4rem;font-size:0.8rem;color:#8b949e;">
+                ⚡ {result['tokens_per_sec']:.0f} tok/s<br>
+                📤 {result['usage']['prompt_tokens']} prompt<br>
+                📥 {result['usage']['completion_tokens']} output<br>
+                🏁 {result.get('finish_reason', 'n/a')}
+                </div>
+                </div>
+                """, unsafe_allow_html=True)
         
-        # Speed comparison chart
-        successful = {m: r for m, r in results_compare.items() if r["success"]}
-        if len(successful) >= 2:
+        # ── Speed comparison chart ──
+        if n_successful >= 2:
             fig_speed = go.Figure()
-            model_labels = [f"{GROQ_MODELS[m]['family']}\n({GROQ_MODELS[m]['params']})" 
-                           for m in successful.keys()]
-            
+            model_labels = [
+                f"{GROQ_MODELS[m]['family']}\n({GROQ_MODELS[m]['params']})"
+                for m in successful.keys()
+            ]
             fig_speed.add_trace(go.Bar(
                 name="Latencia (s)",
                 x=model_labels,
@@ -2301,9 +2340,9 @@ elif module == "⚖️  Comparador de Modelos":
             )
             st.plotly_chart(fig_speed, use_container_width=True)
         
-        # Responses side by side
+        # ── Responses side by side ──
         st.markdown("### 💬 Respuestas Comparadas")
-        resp_cols = st.columns(len(successful))
+        resp_cols = st.columns(max(1, n_successful))
         for col, (model, result) in zip(resp_cols, successful.items()):
             with col:
                 model_color = GROQ_MODELS[model]["color"]
@@ -2313,10 +2352,13 @@ elif module == "⚖️  Comparador de Modelos":
                 {GROQ_MODELS[model]['family']} ({GROQ_MODELS[model]['params']})
                 </div>
                 """, unsafe_allow_html=True)
-                st.markdown(f'<div class="llm-response" style="font-size:0.82rem;">{result["content"]}</div>', 
-                           unsafe_allow_html=True)
+                content_display = result.get("content", "") or "*(sin respuesta)*"
+                st.markdown(
+                    f'<div class="llm-response" style="font-size:0.82rem;">{content_display}</div>',
+                    unsafe_allow_html=True
+                )
         
-        # Token usage comparison
+        # ── Token usage table ──
         df_tokens = pd.DataFrame([{
             "Modelo": GROQ_MODELS[m]["family"],
             "Prompt tokens": r["usage"]["prompt_tokens"],
