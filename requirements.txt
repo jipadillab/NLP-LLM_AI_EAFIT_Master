@@ -1,0 +1,54 @@
+# ============================================================
+# EAFIT — Maestría en Ciencia de Datos
+# NLP & LLM Interactive Lab — requirements.txt
+# Prof. Jorge Iván Padilla-Buriticá
+# ============================================================
+
+# --- Core App ---
+streamlit
+streamlit-extras         # Additional Streamlit components
+
+# --- LLM API ---
+groq>                 # Groq API client (LLaMA, Mistral, Gemma, etc.)
+openai                  # OpenAI-compatible client (optional comparison)
+tiktoken               # Tokenizer counter (GPT-compatible BPE)
+
+# --- NLP Classical & Embeddings ---
+nltk                 # Tokenization, POS tagging, stopwords, n-grams
+spacy                  # Industrial NLP: NER, dependency parsing
+sentence-transformers    # Contextual embeddings (SBERT)
+scikit-learn            # TF-IDF, cosine similarity, clustering, metrics
+gensim               # Word2Vec, GloVe loading, FastText
+
+# --- Text Processing ---
+textblob            # Sentiment analysis, language detection
+langdetect              # Language detection
+regex               # Advanced regex patterns
+chardet                 # Character encoding detection
+
+# --- Tokenization Visualization ---
+tokenizers            # HuggingFace tokenizers (BPE, WordPiece, etc.)
+transformers          # BERT, GPT-2 models & tokenizers
+
+# --- Visualization ---
+plotly               # Interactive charts, heatmaps, scatter plots
+matplotlib              # Classic plotting
+seaborn               # Statistical visualizations
+wordcloud>                # Word cloud generation
+networkx                 # Graph visualization for attention / knowledge graphs
+
+# --- Data ---
+pandas                 # DataFrames for results comparison
+numpy                   # Numerical operations on embeddings
+
+# --- Utilities ---
+python-dotenv            # Load .env API keys
+requests              # HTTP calls
+tqdm                  # Progress bars
+Pillow                  # Image processing (word clouds)
+pyperclip              # Clipboard copy for prompts
+
+# --- Optional: spaCy Spanish model (run after install) ---
+# python -m spacy download es_core_news_sm
+# python -m spacy download en_core_web_sm
+# python -m nltk.downloader all
