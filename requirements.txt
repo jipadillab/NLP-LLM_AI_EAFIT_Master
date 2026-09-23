@@ -1,21 +1,21 @@
 # ============================================================
 # NLP & LLM Interactive Lab — EAFIT
-# requirements.txt  (sin PyTorch / torchvision / transformers)
+# requirements.txt  (SIN PyTorch / torchvision / transformers)
 # ============================================================
-# Instalación local:   pip install -r requirements.txt
-# Streamlit Cloud:      sube este archivo + main_app.py + .streamlit/config.toml
+# Instalación local:  pip install -r requirements.txt
+# Streamlit Cloud:     sube main_app.py + requirements.txt + .streamlit/config.toml
 #
 # POR QUÉ NO HAY torch / torchvision / transformers / sentence-transformers:
-# El *file watcher* de Streamlit recorre todos los submódulos internos de
-# `transformers` (incluye modelos de visión como ViTMatte/ViTPose/YOLOS/
-# ZoeDepth), y cada uno dispara `ModuleNotFoundError: No module named
-# 'torchvision'` en los logs aunque esta app nunca los use — un problema
-# de interacción Streamlit + HuggingFace difícil de silenciar del todo.
-# La solución robusta es no depender de esas librerías: se reemplazan por
-# alternativas equivalentes, 100% CPU, SIN PyTorch:
-#   • tiktoken   → tokenización BPE (incluye GPT-2 original y cl100k)
-#   • tokenizers → tokenización WordPiece (BERT), pura Rust, sin PyTorch
-#   • fastembed  → embeddings densos vía ONNX Runtime, sin PyTorch
+# `transformers` registra internamente cientos de submódulos (incluye
+# modelos de visión como ViTMatte/ViTPose/YOLOS), y el *file watcher* de
+# Streamlit los recorre a todos al arrancar, disparando
+# `ModuleNotFoundError: No module named 'torchvision'` en los logs aunque
+# la app nunca los use. La única forma robusta de eliminar ese error es
+# no depender de esas librerías. Aquí se reemplazan por alternativas
+# 100% CPU, SIN PyTorch:
+#   • tiktoken   → tokenización BPE (GPT-2 original y cl100k moderno)
+#   • tokenizers → tokenización WordPiece de BERT (Rust puro)
+#   • fastembed  → embeddings densos vía ONNX Runtime
 # ============================================================
 
 # --- Core app ---
@@ -26,36 +26,28 @@ numpy>=1.26,<2.0
 # --- Visualización ---
 plotly>=5.20,<6.0
 
-# --- Groq API (modelos modernos: GPT-OSS, Qwen3, LLaMA, DeepSeek — todos gratis) ---
+# --- Groq API (todos los modelos de generación de este lab, gratis) ---
 groq>=0.11,<1.0
 
-# --- Anthropic (Claude) — OPCIONAL, solo para el módulo Comparador ---
-# NOTA: Anthropic no tiene tier gratuito de API (a diferencia de Groq).
-# Si no vas a usar Claude, puedes omitir este paquete sin romper el resto de la app.
-anthropic>=0.34,<1.0
-
-# --- Tokenización ---
-tiktoken>=0.7,<1.0            # BPE: cl100k (ref. GPT-3.5/4) Y "gpt2" (BPE original, 2019)
+# --- Tokenización (sin PyTorch) ---
+tiktoken>=0.7,<1.0            # BPE: cl100k (ref. GPT-3.5/4) y "gpt2" (BPE original, 2019)
 tokenizers>=0.19,<1.0         # WordPiece de BERT — Rust puro, CERO dependencia de PyTorch
 
 # --- NLP clásico ---
 nltk>=3.9,<4.0                 # POS, NER, VADER sentiment, n-gramas
 
-# --- Embeddings, TF-IDF y proyecciones ---
+# --- Embeddings, TF-IDF, similitud coseno y proyecciones ---
 scikit-learn>=1.4,<2.0         # TF-IDF, cosine_similarity, TruncatedSVD (PCA-like)
 fastembed>=0.3,<1.0            # all-MiniLM-L6-v2 / bge-m3 / nomic-embed-text vía ONNX Runtime
 
 # ============================================================
 # NOTAS:
-# - Esta app NO ejecuta pesos de GPT-2/BERT en vivo (solo su tokenización,
-#   que sí es real y en vivo). Ver el módulo "Modelos Clásicos vs
-#   Modernos" para el porqué y la alternativa ilustrativa usada.
-# - Si en tu propio entorno (fuera de Streamlit Cloud) SÍ quieres correr
-#   inferencia real de GPT-2/BERT, puedes instalar por separado:
-#     pip install transformers torch torchvision
-#   y adaptar las funciones load_bert_tokenizer/load_embedding_model,
-#   pero eso reintroduce el problema del file watcher documentado arriba.
 # - bge-m3 y nomic-embed-text se descargan la primera vez que se usan
 #   (cientos de MB a ~2GB) — ten paciencia en la demo en vivo, o
-#   pre-descárgalos antes de clase.
+#   pre-descárgalos antes de clase con:
+#     python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-m3')"
+# - Si necesitas inferencia real de pesos de GPT-2/BERT (no solo
+#   tokenización), esa es una necesidad distinta a la de este lab y
+#   requeriría reintroducir torch/transformers en un entorno aparte
+#   (fuera de Streamlit Cloud, para evitar el problema del watcher).
 # ============================================================
