@@ -1,44 +1,36 @@
 # ============================================================
 # EAFIT — Maestría en Ciencia de Datos
-# NLP & LLM Interactive Lab  (v2 — catálogo corregido, 2026)
+# NLP & LLM Interactive Lab
 # Prof. Jorge Iván Padilla-Buriticá | linkedin.com/in/jipadilla
 # ============================================================
-# Módulos:
+# Módulos cubiertos:
 #   0. Inicio & Teoría
-#   1. Tokenización            (BPE/tiktoken, GPT-2, BERT WordPiece, IDs)
-#   2. Embeddings & Similitud  (TF-IDF, Sentence-Transformers, coseno, 2D)
-#   3. Modelos Clásicos vs Modernos (GPT-2 local  vs  Groq LLM)
-#   4. Chunking para RAG       (Estructural, Recursivo, Semántico, Agéntico)
-#   5. NLP Clásico             (POS, NER, Sentimientos)
-#   6. LLM Lab — Parámetros    (temperature, top_p, max_tokens, stop, seed)
-#   7. Comparador de Modelos   (misma query, varios LLMs Groq)
-#   8. Attention Visualizer    (proxy pedagógico de self-attention)
-#   9. Playground Libre        (chat multi-turn + prompt engineering)
+#   1. Tokenización       (BPE/tiktoken, GPT-2, BERT WordPiece, IDs)
+#   2. Embeddings         (TF-IDF, embeddings densos, similitud coseno, proyección 2D)
+#   3. Chunking para RAG  (Estructural, Recursivo, Semántico, Agéntico)
+#   4. NLP Clásico        (POS, NER, Sentimientos)
+#   5. LLM Lab            (temperature, top_p, max_tokens, stop, seed)
+#   6. Comparador         (misma query, varios modelos Groq)
+#   7. Benchmark          (latencia, tokens/s, percentiles)
+#   8. Attention Viz      (heat-map conceptual de atención)
+#   9. Playground Libre   (chat multi-turn + prompt engineering)
 #
-# NOTA IMPORTANTE SOBRE EL CATÁLOGO DE MODELOS:
-# Groq NO aloja modelos clásicos (GPT-2, BERT, RoBERTa) ni GPT-3.5 para
-# inferencia — solo sirve modelos "open-weight" modernos optimizados para
-# su hardware LPU. Por eso este laboratorio separa dos mundos:
-#   • Modelos MODERNOS → se consultan vía Groq API (requieren API key)
-#   • Modelos CLÁSICOS → solo se usan para TOKENIZACIÓN y EMBEDDINGS,
-#     con librerías ligeras sin PyTorch (tiktoken, tokenizers, fastembed).
-#     No se ejecuta generación real de GPT-2/BERT en este laboratorio.
-# El catálogo de Groq cambia con frecuencia: verifica siempre
-# https://console.groq.com/docs/models antes de una clase en vivo.
+# ── SIN PyTorch / torchvision / transformers / sentence-transformers ──
+# Estas librerías no se usan a propósito. `transformers` registra
+# internamente cientos de submódulos (incluidos modelos de visión como
+# ViTMatte/ViTPose/YOLOS), y el *file watcher* de Streamlit los recorre
+# a todos al arrancar, disparando `ModuleNotFoundError: No module named
+# 'torchvision'` aunque la app nunca los use. La única forma robusta de
+# eliminar ese error es no depender de esas librerías. Aquí se reemplazan
+# por alternativas 100% CPU, sin PyTorch:
+#   • tiktoken   → tokenización BPE (GPT-2 original y cl100k moderno)
+#   • tokenizers → tokenización WordPiece de BERT (Rust puro)
+#   • fastembed  → embeddings densos vía ONNX Runtime
 #
-# NOTA TÉCNICA SOBRE DEPENDENCIAS (importante si despliegas en Streamlit
-# Community Cloud): esta app NO usa `torch`, `torchvision` ni
-# `transformers`/`sentence-transformers` a propósito. Esas librerías
-# registran cientos de submódulos internos (incluidos modelos de visión
-# como ViTMatte/ViTPose/YOLOS) y el *file watcher* de Streamlit los
-# recorre todos al arrancar, disparando `ModuleNotFoundError: No module
-# named 'torchvision'` en los logs aunque la app nunca los use — un bug
-# de interacción Streamlit+HuggingFace bien documentado y molesto de
-# silenciar por completo. La solución robusta es no depender de esas
-# librerías: aquí se reemplazan por alternativas 100% CPU, sin PyTorch:
-#   • tiktoken   → tokenización BPE (GPT-2 y familia GPT-3.5/4)
-#   • tokenizers → tokenización WordPiece (BERT), sin PyTorch
-#   • fastembed  → embeddings densos vía ONNX Runtime, sin PyTorch
+# Todos los modelos de generación (LLM Lab, Comparador, Benchmark,
+# Playground) se sirven vía Groq API — el catálogo se verificó en
+# console.groq.com/docs/models. Ese catálogo cambia con frecuencia:
+# revísalo antes de una clase en vivo.
 # ============================================================
 
 import os
@@ -51,6 +43,7 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ── Optional imports with graceful fallback ──────────────────
 try:
@@ -58,12 +51,6 @@ try:
     GROQ_AVAILABLE = True
 except Exception:
     GROQ_AVAILABLE = False
-
-try:
-    import anthropic as anthropic_sdk
-    ANTHROPIC_AVAILABLE = True
-except Exception:
-    ANTHROPIC_AVAILABLE = False
 
 try:
     import tiktoken
@@ -74,6 +61,7 @@ except Exception:
 try:
     import nltk
     from nltk.tokenize import word_tokenize, sent_tokenize
+    from nltk.util import ngrams
     from nltk.corpus import stopwords
     from nltk import pos_tag, ne_chunk
     from nltk.sentiment import SentimentIntensityAnalyzer
@@ -145,9 +133,9 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; background-color: var(--bg); color: var(--text); }
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-/* IMPORTANTE: no ocultar todo el <header> — ahí vive el botón que abre/cierra
-   la barra lateral. Solo lo hacemos transparente y forzamos que el control
-   de colapso sea siempre visible y con buen contraste sobre el fondo oscuro. */
+/* No ocultar todo el <header>: ahí vive el botón que abre/cierra la
+   barra lateral. Lo hacemos transparente y forzamos que el control de
+   colapso sea siempre visible y con buen contraste sobre fondo oscuro. */
 header[data-testid="stHeader"] { background: transparent; box-shadow: none; visibility: visible; }
 button[data-testid="collapsedControl"],
 [data-testid="stSidebarCollapsedControl"] {
@@ -174,7 +162,6 @@ button[data-testid="collapsedControl"] svg,
 .info-box { background: var(--surface2); border: 1px solid var(--accent2); border-left: 4px solid var(--accent2); border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; font-size: 0.88rem; }
 .warn-box { background: #2d1f00; border: 1px solid var(--accent); border-left: 4px solid var(--accent); border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; font-size: 0.88rem; }
 .success-box { background: #0d2818; border: 1px solid var(--accent3); border-left: 4px solid var(--accent3); border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; font-size: 0.88rem; }
-.danger-box { background: #2d0d0d; border: 1px solid var(--danger); border-left: 4px solid var(--danger); border-radius: 6px; padding: 0.8rem 1rem; margin: 0.5rem 0; font-size: 0.88rem; }
 .formula-box { background: #0d1117; border: 1px solid var(--border); border-left: 4px solid var(--purple); border-radius: 6px; padding: 0.8rem 1.2rem; margin: 0.5rem 0; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: var(--purple); white-space: pre-wrap; }
 .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; text-align: center; transition: border-color 0.2s; }
 .metric-card:hover { border-color: var(--accent); }
@@ -199,13 +186,13 @@ div[data-testid="stExpander"] { background: var(--surface) !important; border: 1
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# CATÁLOGO DE MODELOS — GROQ (vigente; verificado en console.groq.com/docs/models)
+# CATÁLOGO DE MODELOS — GROQ (verificado en console.groq.com/docs/models)
 # ════════════════════════════════════════════════════════════
 GROQ_MODELS = {
     "openai/gpt-oss-120b": {
         "family": "GPT-OSS 120B", "params": "120B (MoE)", "context": 131_072,
         "type": "Decoder-only · Mixture of Experts · Reasoning", "license": "Apache 2.0",
-        "strengths": "Razonamiento profundo, instrucciones complejas, reasoning_effort configurable (low/medium/high)",
+        "strengths": "Razonamiento profundo, instrucciones complejas, reasoning_effort configurable",
         "color": "#f0883e"
     },
     "openai/gpt-oss-20b": {
@@ -217,13 +204,13 @@ GROQ_MODELS = {
     "openai/gpt-oss-safeguard-20b": {
         "family": "GPT-OSS Safeguard 20B", "params": "20B", "context": 131_072,
         "type": "Clasificador de seguridad (policy-aware)", "license": "Apache 2.0",
-        "strengths": "Clasifica contenido contra una política dada en el prompt. Guardrails / moderación",
+        "strengths": "Clasifica contenido contra una política dada en el prompt. Guardrails/moderación",
         "color": "#f85149"
     },
     "qwen/qwen3-32b": {
         "family": "Qwen3 32B", "params": "32B", "context": 131_072,
         "type": "Decoder-only · Reasoning conmutable", "license": "Apache 2.0",
-        "strengths": "Alibaba Cloud. Reasoning on/off vía reasoning_effort=none|default. Fuerte en matemáticas",
+        "strengths": "Reasoning on/off vía reasoning_effort=none|default. Fuerte en matemáticas",
         "color": "#bc8cff"
     },
     "llama-3.3-70b-versatile": {
@@ -241,105 +228,40 @@ GROQ_MODELS = {
     "deepseek-r1-distill-llama-70b": {
         "family": "DeepSeek R1 Distill", "params": "70B", "context": 131_072,
         "type": "Decoder-only · Reasoning (CoT destilado en LLaMA 70B)", "license": "MIT",
-        "strengths": "Razonamiento matemático/lógico de DeepSeek-R1, destilado en una base LLaMA. "
-                     "Gratis en el free tier de Groq (límites diarios más bajos que los demás modelos).",
+        "strengths": "Razonamiento matemático/lógico de DeepSeek-R1, destilado en una base LLaMA",
         "color": "#ffa657"
     },
 }
 
 # ════════════════════════════════════════════════════════════
-# CATÁLOGO OPCIONAL — ANTHROPIC (Claude)
-# NO es gratuito: Anthropic no ofrece un tier gratuito de API como
-# Groq o Google AI Studio (solo créditos de prueba limitados al
-# crear la cuenta). Se incluye como comparación opcional, de pago,
-# requiere la propia API key de Anthropic del usuario.
-# ════════════════════════════════════════════════════════════
-ANTHROPIC_MODELS = {
-    "claude-haiku-4-5-20251001": {
-        "family": "Claude Haiku 4.5", "params": "No divulgado", "context": 200_000,
-        "type": "Decoder-only (propietario)", "license": "Propietaria — de pago",
-        "strengths": "El modelo Claude más económico disponible; útil como referencia de un LLM "
-                     "propietario frente a los open-weight servidos por Groq.",
-        "color": "#d2a8ff"
-    },
-}
-
-# Vista combinada solo para metadatos de presentación (color, familia, params) —
-# las llamadas reales siguen yendo por call_groq() o call_anthropic() según el proveedor.
-MODEL_META = {**GROQ_MODELS, **ANTHROPIC_MODELS}
-
-# ════════════════════════════════════════════════════════════
-# CATÁLOGO DE MODELOS CLÁSICOS — cargados LOCALMENTE (HuggingFace)
-# Estos NO pasan por Groq. Sirven para contrastar "antes vs después"
-# de la era de los LLMs a escala.
-# ════════════════════════════════════════════════════════════
-CLASSIC_MODELS = {
-    "gpt2": {
-        "label": "GPT-2 (small)", "year": 2019, "params": "124M",
-        "note": "OpenAI, 2019. El ancestro directo de la familia GPT. Decoder-only, "
-                "sin RLHF ni instruction-tuning: completa texto, no sigue instrucciones.",
-        "task": "causal_lm"
-    },
-    "distilgpt2": {
-        "label": "DistilGPT-2", "year": 2019, "params": "82M",
-        "note": "Versión destilada de GPT-2 (~40% más pequeña, ~60% más rápida, ~97% del rendimiento).",
-        "task": "causal_lm"
-    },
-    "bert-base-uncased": {
-        "label": "BERT base (uncased)", "year": 2018, "params": "110M",
-        "note": "Google, 2018. Encoder-only, bidireccional. No genera texto: se usa para "
-                "embeddings, clasificación, NER, MLM.",
-        "task": "encoder"
-    },
-    "bert-base-multilingual-cased": {
-        "label": "BERT multilingual", "year": 2018, "params": "178M",
-        "note": "Mismo BERT, entrenado en 104 idiomas incl. español. WordPiece de 119,547 tokens.",
-        "task": "encoder"
-    },
-    "roberta-base": {
-        "label": "RoBERTa base", "year": 2019, "params": "125M",
-        "note": "Facebook AI, 2019. BERT re-entrenado más tiempo, sin NSP, con BPE en vez de WordPiece.",
-        "task": "encoder"
-    },
-}
-
-# ════════════════════════════════════════════════════════════
-# CATÁLOGO DE MODELOS DE EMBEDDING
+# CATÁLOGO DE MODELOS DE EMBEDDING (vía fastembed / ONNX, sin PyTorch)
 # ════════════════════════════════════════════════════════════
 EMBEDDING_MODELS = {
     "all-MiniLM-L6-v2": {
         "hf_id": "sentence-transformers/all-MiniLM-L6-v2",
         "dims": 384, "context": 256, "size": "~90 MB",
-        "note": "Clásico, extremadamente ligero y rápido. Ideal para prototipos donde la "
-                "latencia es la prioridad. Entrenado principalmente en inglés (funciona en "
-                "español pero con pérdida de calidad).",
+        "note": "Clásico, ligero y rápido. Ideal para prototipos. Entrenado sobre todo en "
+                "inglés (funciona en español con algo de pérdida de calidad).",
     },
     "bge-m3": {
         "hf_id": "BAAI/bge-m3",
         "dims": 1024, "context": 8192, "size": "~2.2 GB",
-        "note": "BAAI. Uno de los más potentes para corpus multilingüe/técnico en español. "
-                "Contexto de 8192 tokens. Descarga pesada: úsalo si tu conexión lo permite.",
+        "note": "BAAI. Muy fuerte en corpus multilingüe/técnico en español, contexto de 8192 tokens.",
     },
     "nomic-embed-text": {
         "hf_id": "nomic-ai/nomic-embed-text-v1.5",
         "dims": 768, "context": 8192, "size": "~550 MB",
-        "note": "Nomic AI. El más popular para RAG con Groq en la comunidad open-source. "
-                "Contexto largo de 8192 tokens.",
+        "note": "Nomic AI. Popular para RAG con Groq en la comunidad open-source. Contexto largo.",
     },
 }
 
-# Default sample texts for each module
+# Textos de ejemplo
 SAMPLE_TEXTS = {
     "es": """La inteligencia artificial está transformando profundamente la educación superior en Colombia.
 Las universidades como EAFIT están adoptando modelos de lenguaje grande para personalizar el aprendizaje
 y automatizar la evaluación formativa. Sin embargo, los docentes señalan que el pensamiento crítico
 y la creatividad humana siguen siendo irreemplazables. El Ministerio de Educación analiza marcos
 regulatorios para garantizar el uso ético de estas tecnologías en el aula.""",
-    "en": """Large language models have revolutionized natural language processing by demonstrating
-emergent capabilities that arise at scale. Models like GPT-4, Claude, and LLaMA can perform
-complex reasoning, generate code, and engage in nuanced conversations without task-specific training.
-The key architectural innovation — the Transformer's self-attention mechanism — allows each token
-to attend to all other tokens simultaneously, enabling parallelization impossible with recurrent networks.""",
     "mixed": """El Transformer architecture introduced by Vaswani et al. (2017) propone que
 la atención es todo lo que necesitas. Esta arquitectura utiliza self-attention con matrices Q, K, V
 para calcular: Attention(Q,K,V) = softmax(QK^T / sqrt(d_k)) * V.
@@ -369,7 +291,6 @@ está prohibido y será sancionado según el reglamento estudiantil vigente."""
 
 @st.cache_resource(show_spinner="⚙️ Cargando modelo de embeddings (ONNX, sin PyTorch)…")
 def load_embedding_model(model_key: str = "all-MiniLM-L6-v2"):
-    """Load a fastembed (ONNX Runtime) text-embedding model from the EMBEDDING_MODELS catalog."""
     if not FASTEMBED_AVAILABLE:
         return None
     info = EMBEDDING_MODELS.get(model_key)
@@ -382,7 +303,7 @@ def load_embedding_model(model_key: str = "all-MiniLM-L6-v2"):
         return None
 
 def embed_texts(model, texts: list) -> np.ndarray:
-    """fastembed .embed() returns a generator of numpy arrays; materialize into a matrix."""
+    """fastembed .embed() devuelve un generador de arrays numpy; lo materializamos en matriz."""
     return np.array(list(model.embed(texts)))
 
 @st.cache_resource(show_spinner="⚙️ Cargando tokenizador BERT (WordPiece, sin PyTorch)…")
@@ -394,25 +315,11 @@ def load_bert_tokenizer(model_name: str = "bert-base-multilingual-cased"):
     except Exception:
         return None
 
-def count_tokens_tiktoken(text: str, model: str = "gpt-3.5-turbo") -> int:
-    if not TIKTOKEN_AVAILABLE:
-        return len(text.split())
-    try:
-        enc = tiktoken.encoding_for_model(model)
-        return len(enc.encode(text))
-    except Exception:
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except Exception:
-            return len(text.split())
-
 def tokenize_with_tiktoken(text: str, encoding_name: str = "cl100k_base"):
-    """Returns (tokens, ids) using a tiktoken BPE encoding.
+    """Devuelve (tokens, ids) usando una codificación BPE de tiktoken.
 
     encoding_name="cl100k_base" -> BPE de referencia de GPT-3.5/4 (~100,277 vocab)
-    encoding_name="gpt2"        -> BPE ORIGINAL de GPT-2 (2019, 50,257 vocab),
-                                    sin ninguna dependencia de PyTorch/transformers.
+    encoding_name="gpt2"        -> BPE ORIGINAL de GPT-2 (2019, 50,257 vocab), sin PyTorch.
     """
     if not TIKTOKEN_AVAILABLE:
         toks = text.split()
@@ -446,22 +353,18 @@ def call_groq(
     reasoning_effort=None,
 ) -> dict:
     """
-    Wrapper around Groq's chat.completions API with the parameters Groq actually
-    supports today. Groq does NOT support OpenAI-only params like frequency_penalty
-    or presence_penalty — sending them raises a 400 error, so they are never sent.
-    reasoning_effort is only forwarded for reasoning-capable models (gpt-oss-*, qwen3-32b);
-    it is silently dropped for the others to avoid a 400 error on non-reasoning models.
+    Wrapper de la API de Groq con los parámetros que realmente soporta hoy.
+    Groq NO soporta frequency_penalty / presence_penalty (son de la API de OpenAI);
+    nunca se envían. reasoning_effort solo se envía a modelos con razonamiento
+    (gpt-oss-*, qwen3), y se ignora en los demás para no provocar un error 400.
     """
     if client is None:
         return {"success": False, "error": "Cliente Groq no inicializado. Verifica tu API Key.", "latency": 0,
                 "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
 
     params = {
-        "model": model,
-        "messages": messages,
-        "temperature": float(temperature),
-        "max_tokens": int(max_tokens),
-        "top_p": float(top_p),
+        "model": model, "messages": messages,
+        "temperature": float(temperature), "max_tokens": int(max_tokens), "top_p": float(top_p),
     }
     if stop:
         params["stop"] = stop
@@ -483,52 +386,8 @@ def call_groq(
         }
         tokens_per_sec = usage["completion_tokens"] / latency if latency > 0 else 0
         finish_reason = response.choices[0].finish_reason
-        return {
-            "success": True, "content": content, "usage": usage, "latency": latency,
-            "tokens_per_sec": tokens_per_sec, "finish_reason": finish_reason,
-            "model": model, "params": params,
-        }
-    except Exception as e:
-        return {
-            "success": False, "error": str(e), "latency": time.perf_counter() - t0,
-            "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
-
-def get_anthropic_client(api_key: str):
-    """Anthropic (Claude) — opcional, de pago. No hay tier gratuito de API."""
-    if not ANTHROPIC_AVAILABLE or not api_key:
-        return None
-    try:
-        return anthropic_sdk.Anthropic(api_key=api_key)
-    except Exception:
-        return None
-
-def call_anthropic(client, model: str, messages: list, system: str = "",
-                    temperature: float = 0.7, max_tokens: int = 1024) -> dict:
-    """
-    Wrapper de la API de Claude, con la misma forma de retorno que call_groq()
-    para que ambos proveedores se puedan comparar con el mismo código de UI.
-    `messages` debe traer solo turnos user/assistant; el system prompt va aparte.
-    """
-    if client is None:
-        return {"success": False, "error": "Cliente Anthropic no inicializado. Verifica tu API Key.",
-                "latency": 0, "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
-    t0 = time.perf_counter()
-    try:
-        response = client.messages.create(
-            model=model, max_tokens=int(max_tokens), temperature=float(temperature),
-            system=system or "", messages=messages,
-        )
-        latency = time.perf_counter() - t0
-        content = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
-        usage = {
-            "prompt_tokens": response.usage.input_tokens,
-            "completion_tokens": response.usage.output_tokens,
-            "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
-        }
-        tokens_per_sec = usage["completion_tokens"] / latency if latency > 0 else 0
         return {"success": True, "content": content, "usage": usage, "latency": latency,
-                "tokens_per_sec": tokens_per_sec, "finish_reason": response.stop_reason, "model": model}
+                "tokens_per_sec": tokens_per_sec, "finish_reason": finish_reason, "model": model, "params": params}
     except Exception as e:
         return {"success": False, "error": str(e), "latency": time.perf_counter() - t0,
                 "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
@@ -545,14 +404,12 @@ def token_color(idx: int, total: int) -> str:
     return colors[idx % len(colors)]
 
 def render_token_chips(tokens: list, ids: list = None) -> str:
-    """Render tokens as colored HTML chips, with the numeric token ID underneath when given."""
+    """Renderiza tokens como chips de color, con el ID numérico debajo cuando se provee."""
     chips = []
     for i, tok in enumerate(tokens):
         color = token_color(i, len(tokens))
         display = repr(tok).strip("'") if tok.strip() == "" else tok
-        id_html = ""
-        if ids is not None and i < len(ids):
-            id_html = f'<span class="id-chip">{ids[i]}</span>'
+        id_html = f'<span class="id-chip">{ids[i]}</span>' if ids is not None and i < len(ids) else ""
         chip = (
             f'<span style="display:inline-flex;flex-direction:column;align-items:center;margin:1px;">'
             f'<span class="token-chip" style="background:{color}22;border-color:{color};color:{color}" '
@@ -591,7 +448,7 @@ def explain_parameter(param: str) -> str:
 
 - `none`: sin tokens de razonamiento (más rápido).
 - `low` / `medium` / `high` (GPT-OSS) o `default` (Qwen3): más pasos internos antes de responder.
-- Mayor esfuerzo → más latencia y tokens consumidos, pero mejor precisión en tareas lógicas/matemáticas.
+- Mayor esfuerzo → más latencia y tokens, pero mejor precisión en tareas lógicas/matemáticas.
 """,
         "seed": """
 **🌱 Seed** — Semilla del generador de números aleatorios para reproducibilidad.
@@ -611,7 +468,7 @@ def explain_parameter(param: str) -> str:
 # ── Chunking helpers (implementaciones ligeras, sin dependencia de LangChain) ──
 
 def chunk_fixed_recursive(text: str, chunk_size: int = 300, overlap: int = 50) -> list:
-    """Recursive-character-like splitter: intenta cortar en \\n\\n, luego \\n, luego espacio."""
+    """Splitter recursivo: intenta cortar en \\n\\n, luego \\n, luego '. ', luego espacio."""
     seps = ["\n\n", "\n", ". ", " "]
 
     def _split(t, seps):
@@ -649,7 +506,7 @@ def chunk_fixed_recursive(text: str, chunk_size: int = 300, overlap: int = 50) -
     return overlapped
 
 def chunk_structural_markdown(text: str) -> list:
-    """Split by Markdown headers (#, ##, ###), keeping header hierarchy as metadata."""
+    """Corta por encabezados Markdown (#, ##, ###), preservando la jerarquía."""
     lines = text.split("\n")
     chunks, current_lines, current_headers = [], [], {}
     header_re = re.compile(r"^(#{1,6})\s+(.*)")
@@ -666,8 +523,7 @@ def chunk_structural_markdown(text: str) -> list:
             current_lines = []
             level = len(m.group(1))
             title = m.group(2).strip()
-            keys_to_drop = [k for k in current_headers if k >= level]
-            for k in keys_to_drop:
+            for k in [k for k in current_headers if k >= level]:
                 del current_headers[k]
             current_headers[level] = title
         else:
@@ -682,8 +538,7 @@ def chunk_semantic(sentences: list, embeddings: np.ndarray, threshold: float = 0
     sim = cosine_sim_matrix(embeddings)
     groups, current = [], [0]
     for i in range(1, len(sentences)):
-        s = sim[i, i-1]
-        if s >= threshold:
+        if sim[i, i-1] >= threshold:
             current.append(i)
         else:
             groups.append(current)
@@ -735,20 +590,7 @@ with st.sidebar:
     if api_key:
         st.markdown('<div class="success-box" style="font-size:0.75rem;">✅ API Key detectada</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="warn-box" style="font-size:0.75rem;">⚠️ Sin API Key — módulos que llaman a Groq quedan deshabilitados. Los módulos locales (tokenización, embeddings, modelos clásicos) funcionan igual.</div>', unsafe_allow_html=True)
-
-    st.markdown('<hr style="border-color:#30363d;margin:0.8rem 0;">', unsafe_allow_html=True)
-    st.markdown('<p style="font-family:\'JetBrains Mono\',monospace;font-size:0.75rem;color:#8b949e;">🟣 ANTHROPIC API KEY (opcional, de pago)</p>', unsafe_allow_html=True)
-    anthropic_key_env = os.environ.get("ANTHROPIC_API_KEY", "")
-    anthropic_key_input = st.text_input(
-        "Anthropic API Key", value=anthropic_key_env, type="password", placeholder="sk-ant-...",
-        label_visibility="collapsed", help="A diferencia de Groq, Anthropic NO tiene tier gratuito de API."
-    )
-    anthropic_key = anthropic_key_input or anthropic_key_env
-    if anthropic_key:
-        st.markdown('<div class="success-box" style="font-size:0.72rem;">✅ Claude habilitado como comparación opcional</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="info-box" style="font-size:0.72rem;">ℹ️ Opcional. Anthropic no ofrece API gratuita (solo créditos de prueba al crear cuenta) — a diferencia de Groq, aquí sí se cobra por token desde el primer uso.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="warn-box" style="font-size:0.75rem;">⚠️ Sin API Key — los módulos que llaman a Groq quedan deshabilitados. Tokenización, Embeddings, Chunking (estructural/recursivo/semántico) y NLP Clásico funcionan igual sin key.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr style="border-color:#30363d;margin:0.8rem 0;">', unsafe_allow_html=True)
     st.markdown('<p style="font-family:\'JetBrains Mono\',monospace;font-size:0.75rem;color:#8b949e;">📍 MÓDULO ACTIVO</p>', unsafe_allow_html=True)
@@ -758,11 +600,11 @@ with st.sidebar:
             "🏠  Inicio & Teoría",
             "🔤  Tokenización",
             "📐  Embeddings & Similitud",
-            "🕰️  Modelos Clásicos vs Modernos",
             "🧩  Chunking para RAG",
             "🏷️  NLP Clásico (POS, NER, Sentimientos)",
             "⚡  LLM Lab — Parámetros",
             "⚖️  Comparador de Modelos",
+            "📊  Benchmark de Velocidad",
             "🎯  Attention Visualizer",
             "🧪  Playground Libre",
         ],
@@ -813,7 +655,7 @@ st.markdown("""
         <div class="subtitle">EAFIT · Maestría en Ciencia de Datos · Prof. Jorge Iván Padilla-Buriticá</div>
     </div>
     <span class="badge">Groq API</span>
-    <span class="badge" style="background:#58a6ff;">HuggingFace local</span>
+    <span class="badge" style="background:#58a6ff;">Sin PyTorch</span>
     <span class="badge" style="background:#3fb950;">Streamlit</span>
 </div>
 """, unsafe_allow_html=True)
@@ -828,16 +670,16 @@ if module == "🏠  Inicio & Teoría":
     with col1:
         st.markdown('<div class="metric-card"><div class="metric-value">10</div><div class="metric-label">Módulos interactivos</div></div>', unsafe_allow_html=True)
     with col2:
-        st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#58a6ff;">{len(GROQ_MODELS)}</div><div class="metric-label">Modelos Groq (modernos)</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#58a6ff;">{len(GROQ_MODELS)}</div><div class="metric-label">Modelos Groq (gratis)</div></div>', unsafe_allow_html=True)
     with col3:
-        st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#3fb950;">{len(CLASSIC_MODELS)}</div><div class="metric-label">Modelos clásicos locales</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#3fb950;">{len(EMBEDDING_MODELS)}</div><div class="metric-label">Modelos de embedding</div></div>', unsafe_allow_html=True)
     with col4:
-        st.markdown(f'<div class="metric-card"><div class="metric-value" style="color:#bc8cff;">{len(EMBEDDING_MODELS)}</div><div class="metric-label">Modelos de embedding</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="metric-card"><div class="metric-value" style="color:#bc8cff;">0</div><div class="metric-label">Dependencias de PyTorch</div></div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
-    tab_theory, tab_models, tab_classic, tab_embed, tab_chunk = st.tabs(
-        ["📖 Teoría NLP", "🤖 Modelos Groq", "🕰️ Modelos Clásicos", "📐 Embeddings", "🧩 Chunking"]
+    tab_theory, tab_models, tab_embed, tab_chunk = st.tabs(
+        ["📖 Teoría NLP", "🤖 Modelos Groq", "📐 Embeddings", "🧩 Chunking"]
     )
 
     with tab_theory:
@@ -847,9 +689,10 @@ if module == "🏠  Inicio & Teoría":
             <div class="section-title" style="font-size:1.1rem;">Pipeline NLP Completo</div>
             <div class="info-box"><b>1. Tokenización</b><br>Texto crudo → unidades mínimas. Algoritmos: BPE, WordPiece, SentencePiece.</div>
             <div class="info-box"><b>2. Normalización</b><br>Minúsculas, acentos, URLs, stopwords.</div>
-            <div class="info-box"><b>3. Representación vectorial</b><br>BoW → TF-IDF → Word2Vec → Embeddings contextuales (BERT, GPT).</div>
-            <div class="info-box"><b>4. Modelos de secuencia</b><br>n-gramas → HMM → RNN/LSTM → Transformer.</div>
-            <div class="info-box"><b>5. Tareas downstream</b><br>Clasificación, NER, Sentiment, QA, RAG, Generación.</div>
+            <div class="info-box"><b>3. Representación vectorial</b><br>BoW → TF-IDF → Embeddings densos contextuales.</div>
+            <div class="info-box"><b>4. Chunking</b><br>Dividir documentos largos en fragmentos indexables para RAG.</div>
+            <div class="info-box"><b>5. Modelos de secuencia</b><br>n-gramas → RNN/LSTM → Transformer.</div>
+            <div class="info-box"><b>6. Tareas downstream</b><br>Clasificación, NER, Sentiment, QA, RAG, Generación.</div>
             """, unsafe_allow_html=True)
         with col_right:
             st.markdown('<div class="section-title" style="font-size:1.1rem;">Ecuaciones Clave</div>', unsafe_allow_html=True)
@@ -859,7 +702,11 @@ if module == "🏠  Inicio & Teoría":
 tf(t,d)  = f(t,d) / sum_k f(k,d)
 idf(t)   = log(N / |{d: t in d}|)</div>
             <div class="formula-box">Similitud Coseno:
-cos(theta) = (u . v) / (||u|| ||v||)  en [-1, 1]</div>
+cos(theta) = (u . v) / (||u|| ||v||)  en [-1, 1]
+
+cos = 1  -> vectores idénticos en dirección
+cos = 0  -> vectores ortogonales (sin relación)
+cos = -1 -> vectores opuestos</div>
             <div class="formula-box">Softmax con temperatura T:
 P(w_i) = exp(logit_i / T) / sum_j exp(logit_j / T)
 
@@ -871,62 +718,24 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
             """, unsafe_allow_html=True)
 
     with tab_models:
-        st.markdown('<div class="section-title" style="font-size:1.1rem;">Modelos Modernos Disponibles en Groq (2026)</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <div class="warn-box">
-        <b>⚠️ Qué cambió respecto a catálogos antiguos:</b> Groq retiró modelos como
-        <code>mixtral-8x7b-32768</code>, <code>llama-3.1-70b-versatile</code> y <code>gemma2-9b-it</code>
-        de su catálogo estándar. El catálogo vigente prioriza la familia <b>GPT-OSS</b> (OpenAI, open-weight)
-        y <b>Qwen3</b>, junto a LLaMA 3.3/3.1 para uso general. Verifica siempre
-        <a href="https://console.groq.com/docs/models" style="color:#58a6ff;">console.groq.com/docs/models</a>.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="font-size:1.1rem;">Modelos Disponibles en Groq (gratis)</div>', unsafe_allow_html=True)
         rows = []
         for m, info in GROQ_MODELS.items():
             rows.append({"Model ID (Groq)": m, "Familia": info["family"], "Parámetros": info["params"],
                          "Contexto (tokens)": f"{info['context']:,}", "Tipo": info["type"],
                          "Licencia": info["license"], "Fortalezas": info["strengths"]})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=260)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=280)
         st.markdown("""
         <div class="info-box">
         <b>💡 ¿Por qué Groq?</b> Usa hardware <b>LPU (Language Processing Unit)</b> especializado,
         con velocidades de inferencia 10–100x superiores a GPUs convencionales:
-        típicamente 200–800+ tokens/segundo. Además de LLaMA/GPT-OSS/Qwen3, Groq también sirve
-        <b>DeepSeek R1 Distill</b> (incluido en el catálogo de arriba) totalmente gratis, con
-        límites diarios más ajustados que los demás modelos.
+        típicamente 200–800+ tokens/segundo, sin tarjeta de crédito.
         </div>
         <div class="warn-box">
-        <b>🟣 ¿Y Claude (Anthropic)?</b> A diferencia de Groq, Google AI Studio o Cloudflare
-        Workers AI, <b>Anthropic no ofrece un tier gratuito de API</b> — solo créditos de prueba
-        limitados al crear la cuenta, luego se cobra por token desde el primer uso. Por eso Claude
-        no está en el catálogo gratuito de arriba: se añadió como opción <b>opcional y de pago</b>
-        (clave de Anthropic propia) únicamente en el módulo <b>Comparador de Modelos</b>, para
-        contrastar un LLM propietario cerrado contra los open-weight servidos por Groq.
-        </div>
-        """, unsafe_allow_html=True)
-
-    with tab_classic:
-        st.markdown('<div class="section-title" style="font-size:1.1rem;">Modelos Clásicos (tokenización en vivo, sin PyTorch)</div>', unsafe_allow_html=True)
-        st.markdown("""
-        <div class="info-box">
-        Groq no aloja GPT-2, BERT ni RoBERTa: solo sirve LLMs modernos "instruct". Para comparar la
-        era pre-LLM con la era actual sin arrastrar PyTorch/`transformers` completo (que en
-        Streamlit Cloud dispara errores de <code>torchvision</code> por sus módulos de visión no
-        usados), este laboratorio reproduce la <b>tokenización real</b> de GPT-2 y BERT con
-        librerías ligeras (<code>tiktoken</code>, <code>tokenizers</code>) y usa una comparación
-        <b>ilustrativa</b> —claramente marcada como tal— para la generación de texto.
-        </div>
-        """, unsafe_allow_html=True)
-        rows_c = [{"Modelo": k, "Nombre": v["label"], "Año": v["year"], "Parámetros": v["params"],
-                   "Tarea": "Generación (decoder)" if v["task"] == "causal_lm" else "Codificación (encoder)",
-                   "Nota": v["note"]} for k, v in CLASSIC_MODELS.items()]
-        st.dataframe(pd.DataFrame(rows_c), use_container_width=True, height=240)
-        st.markdown("""
-        <div class="warn-box">
-        <b>🎓 Valor pedagógico:</b> GPT-2 (124M parámetros) genera texto notablemente menos
-        coherente que GPT-OSS-120B, no por mala suerte, sino porque tiene ~1000x menos parámetros,
-        sin RLHF ni instruction-tuning. Este contraste es el corazón del módulo
-        <b>"Modelos Clásicos vs Modernos"</b>.
+        <b>⚠️ El catálogo cambia:</b> Groq retira y agrega modelos con frecuencia (por ejemplo,
+        <code>mixtral-8x7b-32768</code> y <code>gemma2-9b-it</code> ya no están disponibles).
+        Verifica siempre <a href="https://console.groq.com/docs/models" style="color:#58a6ff;">console.groq.com/docs/models</a>
+        antes de una clase en vivo.
         </div>
         """, unsafe_allow_html=True)
 
@@ -937,26 +746,23 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
         st.dataframe(pd.DataFrame(rows_e), use_container_width=True, height=200)
         st.markdown("""
         <div class="info-box">
-        Estos tres modelos se usan localmente (vía <code>fastembed</code> / ONNX Runtime, sin PyTorch), no por Groq API
-        — Groq no expone hoy un endpoint de embeddings propio para estos modelos, así que la práctica
-        estándar en la comunidad es: <b>embeddings locales / HF Inference</b> + <b>generación vía Groq</b>.
+        Estos tres modelos corren localmente vía <code>fastembed</code> (ONNX Runtime), <b>sin
+        PyTorch</b> — Groq no ofrece un endpoint propio de embeddings, así que la práctica estándar
+        en la comunidad es: <b>embeddings locales</b> + <b>generación vía Groq</b>.
         </div>
         """, unsafe_allow_html=True)
 
     with tab_chunk:
         st.markdown('<div class="section-title" style="font-size:1.1rem;">Estrategias de Chunking para RAG</div>', unsafe_allow_html=True)
         st.markdown("""
-        <div class="info-box"><b>Estructural</b> (Markdown/HTML headers) — corta siguiendo la jerarquía real
-        del documento (#, ##, ###). Preserva contexto de sección, ideal para manuales y políticas.</div>
-        <div class="info-box"><b>Recursivo / Fixed-size</b> — corta por tamaño de caracteres, intentando
-        respetar párrafos y oraciones antes de cortar a la fuerza. Equivalente simplificado a
-        <code>RecursiveCharacterTextSplitter</code> de LangChain.</div>
+        <div class="info-box"><b>Estructural</b> (Markdown headers) — corta siguiendo la jerarquía real
+        del documento (#, ##, ###). Preserva contexto de sección.</div>
+        <div class="info-box"><b>Recursivo / Fixed-size</b> — corta por tamaño de caracteres, respetando
+        párrafos y oraciones antes de cortar a la fuerza. Con overlap para no perder contexto.</div>
         <div class="info-box"><b>Semántico</b> — agrupa oraciones consecutivas mientras su similitud
-        coseno (embeddings) se mantenga alta; corta cuando el tema cambia. Equivalente conceptual a
-        <code>SemanticChunker</code>.</div>
-        <div class="info-box"><b>Proposicional / Agéntico</b> — usa un LLM (aquí, Groq) para reescribir
-        el texto en proposiciones atómicas autocontenidas, resolviendo pronombres y ambigüedades antes
-        de indexar. Más costoso, mayor precisión en retrieval.</div>
+        coseno (embeddings) se mantenga alta; corta cuando el tema cambia.</div>
+        <div class="info-box"><b>Proposicional / Agéntico</b> — usa un LLM (Groq) para reescribir el
+        texto en proposiciones atómicas autocontenidas antes de indexar. Más costoso, más preciso.</div>
         """, unsafe_allow_html=True)
         st.markdown("Pruébalas en el módulo **🧩 Chunking para RAG** de la barra lateral.")
 
@@ -977,7 +783,7 @@ elif module == "🔤  Tokenización":
                                help="Escribe cualquier texto. Prueba con código, números, palabras raras.")
 
     tab_bpe, tab_gpt2, tab_bert, tab_compare = st.tabs(
-        ["🔧 BPE (cl100k, familia GPT-3.5/4)", "🐣 GPT-2 (BPE original)", "🤗 BERT (WordPiece)", "📊 Comparativa"]
+        ["🔧 BPE (cl100k, ref. GPT-3.5/4)", "🐣 GPT-2 (BPE original, 2019)", "🤗 BERT (WordPiece)", "📊 Comparativa"]
     )
 
     with tab_bpe:
@@ -992,14 +798,14 @@ elif module == "🔤  Tokenización":
 4. Repite hasta vocabulario de tamaño K
 
 cl100k_base: ~100,277 tokens de vocabulario
-Usado por: GPT-3.5, GPT-4 (referencia histórica de
-la familia BPE moderna; no es el tokenizador de
-los modelos servidos hoy por Groq, que usan sus
-propios tokenizadores BPE/SentencePiece internos)</div>
+Referencia histórica de la familia BPE moderna
+(no es el tokenizador exacto de los modelos que
+sirve hoy Groq, que usan sus propios BPE internos,
+pero sirve como referencia comparativa universal)</div>
             """, unsafe_allow_html=True)
         with col_result:
             if TIKTOKEN_AVAILABLE:
-                tokens_bpe, ids_bpe = tokenize_with_tiktoken(input_text)
+                tokens_bpe, ids_bpe = tokenize_with_tiktoken(input_text, "cl100k_base")
                 n_tokens, n_words = len(tokens_bpe), len(input_text.split())
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Tokens", n_tokens)
@@ -1029,22 +835,28 @@ propios tokenizadores BPE/SentencePiece internos)</div>
 Byte-level BPE: opera sobre bytes UTF-8,
 nunca produce un token "desconocido" (UNK)
 
-Este es el tokenizador ORIGINAL de GPT-2,
-el ancestro directo de todos los BPE modernos.
+Este es el tokenizador ORIGINAL de GPT-2 (OpenAI,
+2019), el ancestro directo de todos los BPE
+modernos. Se obtiene aquí vía tiktoken, sin
+ninguna dependencia de PyTorch/transformers.
+
 Compáralo con cl100k_base: mismo algoritmo,
 vocabulario ~2x más pequeño -> más tokens
 para el mismo texto.</div>
             """, unsafe_allow_html=True)
         with col_result:
-            tokens_g, ids_g = tokenize_with_tiktoken(input_text, encoding_name="gpt2")
-            toks_g_clean = [t.replace("Ġ", "·").replace("\n", "⏎") for t in tokens_g]  # Ġ = espacio precedente
-            c1, c2 = st.columns(2)
-            c1.metric("Tokens GPT-2", len(tokens_g))
-            c2.metric("Vocab size", "50,257")
-            st.caption("`·` representa un espacio antes del token (carácter Ġ interno de GPT-2, byte-level BPE)")
-            st.markdown(render_token_chips(toks_g_clean[:60], ids_g[:60]), unsafe_allow_html=True)
-            if len(tokens_g) > 60:
-                st.caption(f"... mostrando primeros 60 de {len(tokens_g)} tokens")
+            if TIKTOKEN_AVAILABLE:
+                tokens_g, ids_g = tokenize_with_tiktoken(input_text, "gpt2")
+                toks_g_clean = [t.replace("Ġ", "·").replace("\n", "⏎") for t in tokens_g]
+                c1, c2 = st.columns(2)
+                c1.metric("Tokens GPT-2", len(tokens_g))
+                c2.metric("Vocab size", "50,257")
+                st.caption("`·` representa un espacio antes del token (carácter Ġ interno de GPT-2, byte-level BPE)")
+                st.markdown(render_token_chips(toks_g_clean[:60], ids_g[:60]), unsafe_allow_html=True)
+                if len(tokens_g) > 60:
+                    st.caption(f"... mostrando primeros 60 de {len(tokens_g)} tokens")
+            else:
+                st.warning("tiktoken no disponible. Instala: `pip install tiktoken`")
 
     with tab_bert:
         col_explain, col_result = st.columns([1, 1])
@@ -1060,18 +872,18 @@ absoluta; WordPiece por ganancia relativa.
 Prefijo "##" = continuación de la palabra anterior
 "transformación" -> ['trans','##form','##aci','##ón']
 
-Vocab BERT-multilingual: 119,547 tokens</div>
+Vocab BERT-multilingual: 119,547 tokens
+(vía la librería `tokenizers`, sin PyTorch)</div>
             """, unsafe_allow_html=True)
         with col_result:
             bert_tok = load_bert_tokenizer()
             if bert_tok:
                 try:
                     encoding = bert_tok.encode(input_text)
-                    ids_bert = encoding.ids
-                    tokens_bert = encoding.tokens
+                    ids_bert, tokens_bert = encoding.ids, encoding.tokens
                     c1, c2 = st.columns(2)
                     c1.metric("Tokens BERT", len(tokens_bert))
-                    c2.metric("Incluye [CLS]/[SEP]", "Sí" if tokens_bert and tokens_bert[0] in ("[CLS]", "<s>") else "Depende del modelo")
+                    c2.metric("Incluye [CLS]/[SEP]", "Sí" if tokens_bert and tokens_bert[0] == "[CLS]" else "Depende del modelo")
                     st.markdown("**Tokens + IDs WordPiece:**")
                     st.markdown(render_token_chips(tokens_bert[:60], ids_bert[:60]), unsafe_allow_html=True)
                     with st.expander("Ver tabla completa de IDs"):
@@ -1084,16 +896,16 @@ Vocab BERT-multilingual: 119,547 tokens</div>
                 except Exception as e:
                     st.error(f"Error tokenizando: {e}")
             else:
-                st.info("Cargando tokenizador BERT-multilingual... (requiere descarga inicial del tokenizer.json, ~1-2 MB, sin PyTorch)")
+                st.info("Cargando tokenizador BERT-multilingual... (descarga inicial ligera del tokenizer.json, sin PyTorch)")
 
     with tab_compare:
         st.markdown('<div class="section-title" style="font-size:1rem;">Comparativa de Tokenizadores</div>', unsafe_allow_html=True)
         results = {}
         if TIKTOKEN_AVAILABLE:
-            toks, ids_ = tokenize_with_tiktoken(input_text)
+            toks, _ = tokenize_with_tiktoken(input_text, "cl100k_base")
             results["BPE cl100k (ref. GPT-3.5/4)"] = {"tokens": len(toks), "vocab_size": "~100,277",
                 "algo": "Byte-Pair Encoding", "era": "2023", "ejemplo": " | ".join(toks[:8]) + "..."}
-            toks_g, _ = tokenize_with_tiktoken(input_text, encoding_name="gpt2")
+            toks_g, _ = tokenize_with_tiktoken(input_text, "gpt2")
             results["BPE (GPT-2 original)"] = {"tokens": len(toks_g), "vocab_size": "50,257",
                 "algo": "BPE byte-level", "era": "2019", "ejemplo": " | ".join(str(t) for t in toks_g[:8]) + "..."}
         bt = load_bert_tokenizer()
@@ -1142,7 +954,7 @@ elif module == "📐  Embeddings & Similitud":
     </div>
     """, unsafe_allow_html=True)
 
-    tab_tfidf, tab_sbert, tab_viz = st.tabs(["📊 TF-IDF (disperso)", "🤗 Embeddings densos + IDs", "🗺️ Visualización 2D"])
+    tab_tfidf, tab_dense, tab_viz = st.tabs(["📊 TF-IDF (disperso)", "🤗 Embeddings densos + similitud coseno", "🗺️ Visualización 2D"])
 
     with tab_tfidf:
         st.markdown('<div class="section-title" style="font-size:1rem;">TF-IDF: Representación Dispersa</div>', unsafe_allow_html=True)
@@ -1186,11 +998,10 @@ elif module == "📐  Embeddings & Similitud":
                 except Exception as e:
                     st.error(f"Error: {e}")
             else:
-                st.warning("Necesitas al menos 2 documentos y sklearn instalado.")
+                st.warning("Necesitas al menos 2 documentos y scikit-learn instalado.")
 
-    with tab_sbert:
+    with tab_dense:
         st.markdown('<div class="section-title" style="font-size:1rem;">Embeddings Contextuales Densos</div>', unsafe_allow_html=True)
-
         embed_choice = st.selectbox(
             "Modelo de embedding:", list(EMBEDDING_MODELS.keys()),
             format_func=lambda k: f"{k} ({EMBEDDING_MODELS[k]['dims']}d, {EMBEDDING_MODELS[k]['size']})"
@@ -1215,22 +1026,21 @@ elif module == "📐  Embeddings & Similitud":
         sents_input = st.text_area("Frases (una por línea):", value="\n".join(default_sents), height=160)
         sentences = [s.strip() for s in sents_input.split("\n") if s.strip()]
 
-        if st.button("⚡ Calcular Embeddings", key="sbert_btn") and len(sentences) >= 2:
+        if st.button("⚡ Calcular Embeddings", key="emb_btn") and len(sentences) >= 2:
             emb_model = load_embedding_model(embed_choice)
             if emb_model:
-                with st.spinner("Calculando embeddings (ONNX Runtime)..."):
+                with st.spinner("Calculando embeddings (ONNX Runtime, sin PyTorch)..."):
                     t0 = time.perf_counter()
                     embeddings = embed_texts(emb_model, sentences)
                     elapsed = time.perf_counter() - t0
 
                 st.success(f"✅ {len(sentences)} embeddings de {embeddings.shape[1]} dimensiones en {elapsed:.3f}s")
 
-                # Show a slice of the raw vector + its "IDs" (dimension index) for one sentence
                 with st.expander("🔍 Ver el vector crudo (primeras 20 dimensiones) de la Frase 1"):
                     df_vec = pd.DataFrame({"Dimensión (índice)": range(20), "Valor": embeddings[0][:20].round(4)})
                     st.dataframe(df_vec, use_container_width=True, height=200)
                     st.caption("A diferencia de un token ID (entero, categórico), cada componente de un embedding "
-                               "es un número real continuo — no representa una palabra por sí solo, solo cobra "
+                               "es un número real continuo — no representa una palabra por sí sola, solo cobra "
                                "sentido en conjunto con las demás dimensiones.")
 
                 sim = cosine_sim_matrix(embeddings)
@@ -1252,7 +1062,7 @@ elif module == "📐  Embeddings & Similitud":
                                        "Frase B": f"S{j+1}: {sentences[j][:45]}...",
                                        "Similitud": round(float(sim[i, j]), 4)})
                 df_pairs = pd.DataFrame(pairs).sort_values("Similitud", ascending=False)
-                st.markdown("**Ranking de pares por similitud:**")
+                st.markdown("**Ranking de pares por similitud coseno:**")
                 st.dataframe(df_pairs, use_container_width=True, height=220)
 
                 st.markdown("""
@@ -1320,127 +1130,7 @@ elif module == "📐  Embeddings & Similitud":
                 st.warning("Necesitas `fastembed` y `scikit-learn` instalados.")
 
 # ════════════════════════════════════════════════════════════
-# MODULE 3: MODELOS CLÁSICOS vs MODERNOS
-# ════════════════════════════════════════════════════════════
-elif module == "🕰️  Modelos Clásicos vs Modernos":
-    st.markdown('<div class="section-title">De GPT-2 (2019) a GPT-OSS (2025): dos eras de LLMs</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="info-box">
-    Este módulo compara la era <b>pre-instruction-tuning</b> (GPT-2, BERT — 2018/2019) con la era
-    actual de LLMs (GPT-OSS, Qwen3, LLaMA — vía Groq). La comparación de <b>generación</b> es
-    ilustrativa (no ejecuta pesos de GPT-2 en vivo — ver nota técnica abajo); la comparación de
-    <b>tokenización</b> sí es 100% en vivo con las librerías reales de cada época.
-    </div>
-    """, unsafe_allow_html=True)
-
-    rows_c = [{"Modelo": k, "Nombre": v["label"], "Año": v["year"], "Parámetros": v["params"],
-               "Tarea nativa": "Generación autoregresiva (decoder)" if v["task"] == "causal_lm" else "Codificación bidireccional (encoder)",
-               "Nota": v["note"]} for k, v in CLASSIC_MODELS.items()]
-    st.dataframe(pd.DataFrame(rows_c), use_container_width=True, height=220)
-
-    st.markdown('<div class="section-title" style="font-size:1.1rem;">🔤 Tokenización en vivo: GPT-2 (2019) vs BPE moderno</div>', unsafe_allow_html=True)
-    prompt_cm = st.text_area(
-        "Texto a tokenizar con ambos algoritmos:",
-        value="Artificial intelligence will change education because it personalizes learning at scale.",
-        height=70
-    )
-    if TIKTOKEN_AVAILABLE and prompt_cm.strip():
-        toks_old, ids_old = tokenize_with_tiktoken(prompt_cm, encoding_name="gpt2")
-        toks_new, ids_new = tokenize_with_tiktoken(prompt_cm, encoding_name="cl100k_base")
-        col_t1, col_t2 = st.columns(2)
-        with col_t1:
-            st.markdown(f"**GPT-2 BPE (2019, vocab 50,257)** — {len(toks_old)} tokens")
-            st.markdown(render_token_chips([t.replace('Ġ', '·') for t in toks_old[:40]], ids_old[:40]), unsafe_allow_html=True)
-        with col_t2:
-            st.markdown(f"**cl100k BPE (ref. GPT-3.5/4, vocab ~100,277)** — {len(toks_new)} tokens")
-            st.markdown(render_token_chips(toks_new[:40], ids_new[:40]), unsafe_allow_html=True)
-        st.caption("Mismo texto, mismo algoritmo (BPE) — el vocabulario más grande y mejor entrenado de la "
-                   "era moderna produce, casi siempre, menos tokens para el mismo texto.")
-
-    st.markdown('<div class="section-title" style="font-size:1.1rem;">💬 Generación: ilustrativo (GPT-2) vs en vivo (Groq)</div>', unsafe_allow_html=True)
-    col_cfg1, col_cfg2 = st.columns(2)
-    with col_cfg1:
-        st.markdown("### 🐣 GPT-2 (124M, 2019) — ilustrativo")
-        st.markdown("""
-        <div class="warn-box" style="font-size:0.8rem;">
-        ⚠️ No se ejecuta inferencia real aquí: correr pesos de GPT-2 requiere PyTorch, y
-        <code>transformers</code> arrastra cientos de submódulos de visión que rompen el
-        <i>file watcher</i> de Streamlit Cloud incluso sin usarlos (ver nota al final de la página).
-        El texto de abajo es una <b>reconstrucción representativa</b> del estilo típico de GPT-2
-        con este tipo de prompt: continúa la frase de forma plausible pero divaga, pierde el hilo
-        o se repite tras pocas oraciones — no sigue instrucciones porque nunca fue entrenado para eso.
-        </div>
-        """, unsafe_allow_html=True)
-        illustrative_gpt2 = (
-            prompt_cm.strip() + " of the most important thing in the world. It is also a good way "
-            "to get a job in the future, and it is also a good way to get a job in the future. "
-            "The future of education is not the same as the future of education."
-        )
-        st.markdown(f'<div class="llm-response" style="font-size:0.85rem;">{illustrative_gpt2}</div>', unsafe_allow_html=True)
-        st.caption("↑ Ilustrativo — nota la repetición y la falta de una respuesta real a la instrucción implícita.")
-    with col_cfg2:
-        st.markdown("### 🚀 Modelo moderno (Groq) — en vivo")
-        modern_choice = st.selectbox(
-            "Modelo moderno:", list(GROQ_MODELS.keys()),
-            format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})", key="modern_choice"
-        )
-        modern_max = st.slider("max_tokens", 50, 500, 150, key="modern_mt")
-        modern_temp = st.slider("temperature", 0.0, 2.0, 0.7, 0.1, key="modern_temp")
-        if st.button("⚡ Generar con el modelo moderno", key="run_modern", use_container_width=True) and prompt_cm.strip():
-            if not api_key:
-                st.markdown('<div class="warn-box">⚠️ Se requiere Groq API Key en la barra lateral.</div>', unsafe_allow_html=True)
-            else:
-                client = get_groq_client(api_key)
-                with st.spinner("Generando vía Groq..."):
-                    r = call_groq(client=client, model=modern_choice,
-                                  messages=[{"role": "user", "content": prompt_cm}],
-                                  temperature=modern_temp, max_tokens=modern_max)
-                if r["success"]:
-                    st.markdown(f'<div class="llm-response" style="font-size:0.85rem;">{r["content"]}</div>', unsafe_allow_html=True)
-                    st.caption(f"⏱️ {r['latency']:.2f}s · {r['tokens_per_sec']:.0f} tok/s · instruction-tuned + RLHF")
-                else:
-                    st.error(r.get("error", "Error"))
-
-    st.markdown("""
-    <div class="success-box">
-    🎓 <b>Qué observar:</b> GPT-2 tiende a divagar, repetirse o perder el hilo tras pocas
-    oraciones — está prediciendo el token más probable sin ningún concepto de "responder a una
-    instrucción". El modelo moderno entiende la intención, mantiene coherencia larga y sigue un
-    formato conversacional. La diferencia no es solo de tamaño: es de <i>paradigma de
-    entrenamiento</i> (pretraining puro vs. pretraining + SFT + RLHF).
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown('<div class="section-title" style="font-size:1.1rem;">Encoders clásicos: BERT / RoBERTa (Masked Language Modeling)</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="info-box">
-    BERT y RoBERTa son <b>encoder-only</b>: no completan texto de forma autoregresiva. Su tarea
-    nativa de preentrenamiento es <b>Masked Language Modeling (MLM)</b> — predecir una palabra
-    oculta usando contexto de AMBOS lados a la vez (por eso son "bidireccionales").
-    </div>
-    <div class="formula-box">P(w_mask | contexto_izq, contexto_der) = softmax(W · h_mask + b)
-
-h_mask = representación final de la posición enmascarada,
-que ya incorporó información de TODA la oración (self-attention
-sin máscara causal, a diferencia de un decoder como GPT-2/GPT-OSS)</div>
-    """, unsafe_allow_html=True)
-    mlm_text = st.text_input("Frase con un hueco a completar mentalmente:",
-                              value="La capital de Colombia es ___.")
-    st.markdown("""
-    <div class="chunk-box">
-    🧠 <b>Ejercicio guiado</b> (sin inferencia en vivo): si fueras BERT, ¿qué palabras tendrían
-    probabilidad alta para el hueco de arriba? Piensa en: (1) el tipo gramatical esperado
-    (sustantivo propio), (2) el conocimiento de mundo necesario (capitales de países),
-    (3) qué tan única es la respuesta dado el contexto. Este es exactamente el tipo de señal
-    que MLM usa para aprender representaciones — sin ninguna etiqueta humana, solo prediciendo
-    palabras ocultas en texto masivo.
-    </div>
-    """, unsafe_allow_html=True)
-    st.caption("Para inferencia real de MLM (BERT/RoBERTa) fuera de este lab: `pip install transformers torch` "
-               "en un entorno separado y usa `pipeline('fill-mask', model=...)`.")
-
-
+# MODULE 3: CHUNKING PARA RAG
 # ════════════════════════════════════════════════════════════
 elif module == "🧩  Chunking para RAG":
     st.markdown('<div class="section-title">Estrategias de Chunking para RAG</div>', unsafe_allow_html=True)
@@ -1454,14 +1144,13 @@ elif module == "🧩  Chunking para RAG":
     """, unsafe_allow_html=True)
 
     tab_struct, tab_fixed, tab_sem, tab_agent = st.tabs(
-        ["🏗️ Estructural (Markdown)", "✂️ Recursivo / Fixed-size", "🧠 Semántico", "🤖 Proposicional / Agéntico"]
+        ["🏗️ Estructural (Markdown)", "✂️ Recursivo / Fixed-size", "🧠 Semántico (coseno)", "🤖 Proposicional / Agéntico"]
     )
 
     with tab_struct:
         st.markdown("""
         <div class="formula-box">Corta por encabezados Markdown (#, ##, ###...)
-Preserva la jerarquía como metadata de cada chunk.
-Equivalente a: MarkdownHeaderTextSplitter</div>
+Preserva la jerarquía como metadata de cada chunk.</div>
         """, unsafe_allow_html=True)
         doc_md = st.text_area("Documento Markdown:", value=SAMPLE_TEXTS["rag_doc"], height=220, key="md_doc")
         chunks_struct = chunk_structural_markdown(doc_md)
@@ -1480,8 +1169,7 @@ Equivalente a: MarkdownHeaderTextSplitter</div>
         <div class="formula-box">Corta por tamaño fijo de caracteres, intentando
 respetar párrafos (\\n\\n) y oraciones antes de
 cortar a la fuerza. Con overlap para no perder
-contexto en los bordes.
-Equivalente simplificado a: RecursiveCharacterTextSplitter</div>
+contexto en los bordes entre chunks.</div>
         """, unsafe_allow_html=True)
         doc_fixed = st.text_area("Documento:", value=SAMPLE_TEXTS["rag_doc"], height=180, key="fixed_doc")
         c1, c2 = st.columns(2)
@@ -1509,15 +1197,14 @@ Equivalente simplificado a: RecursiveCharacterTextSplitter</div>
 2. Calcula el embedding de cada oración
 3. Agrupa oraciones consecutivas mientras la
    similitud coseno con la anterior >= threshold
-4. Corta cuando el tema cambia (similitud cae)
-Equivalente conceptual a: SemanticChunker</div>
+4. Corta cuando el tema cambia (similitud cae)</div>
         """, unsafe_allow_html=True)
         if not (FASTEMBED_AVAILABLE and NLTK_AVAILABLE):
             st.warning("Requiere `fastembed` y NLTK instalados.")
         else:
             doc_sem = st.text_area("Documento:", value=SAMPLE_TEXTS["rag_doc"].replace("#", "").replace("\n\n", " "),
                                     height=150, key="sem_doc")
-            sem_threshold = st.slider("Umbral de similitud (threshold)", 0.1, 0.95, 0.55, 0.05)
+            sem_threshold = st.slider("Umbral de similitud coseno (threshold)", 0.1, 0.95, 0.55, 0.05)
             sem_model = st.selectbox("Modelo de embedding:", list(EMBEDDING_MODELS.keys()), key="sem_model")
             if st.button("🧠 Chunkear semánticamente", key="run_sem_chunk"):
                 try:
@@ -1542,12 +1229,10 @@ Equivalente conceptual a: SemanticChunker</div>
 
     with tab_agent:
         st.markdown("""
-        <div class="formula-box">Un LLM reescribe el texto en proposiciones
+        <div class="formula-box">Un LLM (Groq) reescribe el texto en proposiciones
 atómicas: hechos independientes, sin pronombres
-ambiguos. Mayor costo (llamada a LLM por chunk),
-mayor precisión de retrieval.
-Equivalente a: chunking "Propositional" / "Agentic"
-con ChatGroq + PromptTemplate</div>
+ambiguos. Mayor costo (llamada a LLM), mayor
+precisión de retrieval.</div>
         """, unsafe_allow_html=True)
         if not api_key:
             st.markdown('<div class="warn-box">⚠️ Este método requiere Groq API Key (usa un LLM para chunkear).</div>', unsafe_allow_html=True)
@@ -1586,7 +1271,7 @@ con ChatGroq + PromptTemplate</div>
     """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# MODULE 5: NLP CLÁSICO
+# MODULE 4: NLP CLÁSICO
 # ════════════════════════════════════════════════════════════
 elif module == "🏷️  NLP Clásico (POS, NER, Sentimientos)":
     st.markdown('<div class="section-title">NLP Clásico: POS, NER, Sentimientos y Estadísticas</div>', unsafe_allow_html=True)
@@ -1639,8 +1324,8 @@ IN=Preposition CC=Conjunction PRP=Pronoun NNP=Proper Noun CD=Cardinal</div>
                 st.markdown(f'<div class="token-container">{"".join(chips_ner)}</div>', unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(entities), use_container_width=True, height=200)
             else:
-                st.info("No se detectaron entidades con NLTK. Prueba en inglés o usa un modelo BERT-NER en español desde el módulo Playground.")
-            st.markdown('<div class="warn-box"><b>💡 Nota:</b> NLTK NER funciona mejor en inglés. Para español, usar spaCy (es_core_news_lg) o un BERT fine-tuned para NER en español.</div>', unsafe_allow_html=True)
+                st.info("No se detectaron entidades con NLTK. Funciona mejor en inglés — para español, considera spaCy o un BERT fine-tuned para NER.")
+            st.markdown('<div class="warn-box"><b>💡 Nota:</b> NLTK NER funciona mejor en inglés. Para español, la opción estándar es spaCy (es_core_news_lg) o un modelo BERT afinado para NER en español.</div>', unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Error en NER: {e}")
 
@@ -1649,8 +1334,10 @@ IN=Preposition CC=Conjunction PRP=Pronoun NNP=Proper Noun CD=Cardinal</div>
         test_sentences = ["I love this product, it is absolutely amazing!",
                           "This is the worst experience I have ever had.",
                           "The weather today is okay, nothing special.",
-                          "Artificial intelligence is transforming education in incredible ways."]
-        custom_sent = st.text_area("Frases (una por línea, inglés funciona mejor):", value="\n".join(test_sentences), height=130)
+                          "Artificial intelligence is transforming education in incredible ways.",
+                          "I'm not sure if I like this feature or not.",
+                          "Despite some issues, the overall experience was positive."]
+        custom_sent = st.text_area("Frases (una por línea, inglés funciona mejor):", value="\n".join(test_sentences), height=150)
         sent_list = [s.strip() for s in custom_sent.split("\n") if s.strip()]
         try:
             sia = SentimentIntensityAnalyzer()
@@ -1659,18 +1346,20 @@ IN=Preposition CC=Conjunction PRP=Pronoun NNP=Proper Noun CD=Cardinal</div>
                 scores = sia.polarity_scores(sentence)
                 sentiment = "Positivo" if scores["compound"] >= 0.05 else "Negativo" if scores["compound"] <= -0.05 else "Neutro"
                 results_sent.append({"Texto": sentence[:60], "Positivo": round(scores["pos"], 3),
-                                     "Negativo": round(scores["neg"], 3), "Compound": round(scores["compound"], 3), "Sentimiento": sentiment})
+                                     "Negativo": round(scores["neg"], 3), "Neutro": round(scores["neu"], 3),
+                                     "Compound": round(scores["compound"], 3), "Sentimiento": sentiment})
             df_sent = pd.DataFrame(results_sent)
-            st.dataframe(df_sent, use_container_width=True, height=220)
+            st.dataframe(df_sent, use_container_width=True, height=250)
             fig_sent = px.bar(df_sent, x="Texto", y="Compound", color="Sentimiento",
                                color_discrete_map={"Positivo": "#3fb950", "Negativo": "#f85149", "Neutro": "#8b949e"},
-                               title="Score Compound por frase")
-            fig_sent.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"), height=300, xaxis=dict(tickangle=-20))
+                               title="Score Compound (VADER) por frase")
+            fig_sent.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"), height=320, xaxis=dict(tickangle=-20))
             st.plotly_chart(fig_sent, use_container_width=True)
         except Exception as e:
             st.error(f"Error en análisis de sentimientos: {e}")
 
     with tab_stats:
+        st.markdown('<div class="section-title" style="font-size:1rem;">Estadísticas Lingüísticas y N-gramas</div>', unsafe_allow_html=True)
         try:
             tokens_all = word_tokenize(text_nlp)
             words_only = [w.lower() for w in tokens_all if w.isalpha()]
@@ -1684,17 +1373,36 @@ IN=Preposition CC=Conjunction PRP=Pronoun NNP=Proper Noun CD=Cardinal</div>
             c2.metric("Palabras únicas", len(set(words_only)))
             c3.metric("Riqueza léxica", f"{len(set(words_only))/max(len(words_only),1):.3f}")
             c4.metric("Palabras de contenido", len(content_words))
-            freq = Counter(content_words).most_common(15)
-            df_freq = pd.DataFrame(freq, columns=["Palabra", "Frecuencia"])
-            fig_freq = px.bar(df_freq, x="Frecuencia", y="Palabra", orientation="h", title="Top 15 palabras de contenido",
-                               color_discrete_sequence=["#58a6ff"])
-            fig_freq.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"), height=380, yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig_freq, use_container_width=True)
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                freq = Counter(content_words).most_common(15)
+                df_freq = pd.DataFrame(freq, columns=["Palabra", "Frecuencia"])
+                fig_freq = px.bar(df_freq, x="Frecuencia", y="Palabra", orientation="h", title="Top 15 palabras de contenido",
+                                   color_discrete_sequence=["#58a6ff"])
+                fig_freq.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"),
+                                        height=380, yaxis=dict(autorange="reversed"))
+                st.plotly_chart(fig_freq, use_container_width=True)
+            with col_f2:
+                n_gram_n = st.slider("N para n-grama", 1, 5, 2)
+                try:
+                    word_tokens_clean = [w.lower() for w in tokens_all if w.isalpha() and len(w) > 1]
+                    grams = list(ngrams(word_tokens_clean, n_gram_n))
+                    gram_freq = Counter(grams).most_common(15)
+                    if gram_freq:
+                        df_ngrams = pd.DataFrame([(" ".join(g), c) for g, c in gram_freq], columns=["N-grama", "Frecuencia"])
+                        fig_ng = px.bar(df_ngrams, x="Frecuencia", y="N-grama", orientation="h",
+                                         title=f"Top 15 {n_gram_n}-gramas", color_discrete_sequence=["#bc8cff"])
+                        fig_ng.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"),
+                                              height=380, yaxis=dict(autorange="reversed"))
+                        st.plotly_chart(fig_ng, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generando n-gramas: {e}")
         except Exception as e:
             st.error(f"Error en estadísticas: {e}")
 
 # ════════════════════════════════════════════════════════════
-# MODULE 6: LLM LAB — PARÁMETROS
+# MODULE 5: LLM LAB — PARÁMETROS
 # ════════════════════════════════════════════════════════════
 elif module == "⚡  LLM Lab — Parámetros":
     st.markdown('<div class="section-title">LLM Lab: Explorando Parámetros de Inferencia</div>', unsafe_allow_html=True)
@@ -1773,14 +1481,14 @@ elif module == "⚡  LLM Lab — Parámetros":
                 st.markdown(f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{finish_color};">finish_reason: {result["finish_reason"]}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="llm-response">{result["content"]}</div>', unsafe_allow_html=True)
                 with st.expander("🔍 Ver tokens + IDs del output (cl100k BPE)"):
-                    out_toks, out_ids = tokenize_with_tiktoken(result["content"])
+                    out_toks, out_ids = tokenize_with_tiktoken(result["content"], "cl100k_base")
                     st.markdown(render_token_chips(out_toks[:100], out_ids[:100]), unsafe_allow_html=True)
             else:
                 st.error(f"Error: {result.get('error', 'Unknown error')}")
 
 
 # ════════════════════════════════════════════════════════════
-# MODULE 7: COMPARADOR DE MODELOS
+# MODULE 6: COMPARADOR DE MODELOS
 # ════════════════════════════════════════════════════════════
 elif module == "⚖️  Comparador de Modelos":
     st.markdown('<div class="section-title">Comparador: Misma Query, Múltiples LLMs Groq</div>', unsafe_allow_html=True)
@@ -1790,25 +1498,10 @@ elif module == "⚖️  Comparador de Modelos":
     client = get_groq_client(api_key)
 
     models_to_compare = st.multiselect(
-        "Selecciona modelos Groq a comparar (máximo 4, todos gratis):", options=list(GROQ_MODELS.keys()),
+        "Selecciona modelos a comparar (máximo 4):", options=list(GROQ_MODELS.keys()),
         default=["llama-3.1-8b-instant", "openai/gpt-oss-20b", "qwen/qwen3-32b"],
-        format_func=lambda m: f"{MODEL_META[m]['family']} ({MODEL_META[m]['params']})", max_selections=4
+        format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})", max_selections=4
     )
-
-    include_claude = st.checkbox(
-        "🟣 Incluir Claude (Anthropic) en la comparación — opcional, de pago, requiere tu propia API key",
-        value=False,
-        disabled=not anthropic_key,
-        help="Ingresa tu Anthropic API Key en la barra lateral para habilitar esta opción."
-    )
-    if include_claude and not anthropic_key:
-        st.caption("Ingresa una Anthropic API Key en la barra lateral para habilitarlo.")
-    claude_model_for_cmp = None
-    if include_claude and anthropic_key:
-        claude_model_for_cmp = st.selectbox(
-            "Modelo Claude:", list(ANTHROPIC_MODELS.keys()),
-            format_func=lambda m: f"{ANTHROPIC_MODELS[m]['family']} — de pago", key="cmp_claude_model"
-        )
     col_p1, col_p2, col_p3 = st.columns(3)
     cmp_temperature = col_p1.slider("temperature", 0.0, 2.0, 0.7, 0.1, key="cmp_t")
     cmp_max_tokens = col_p2.slider("max_tokens", 50, 2048, 400, 50, key="cmp_mt")
@@ -1819,25 +1512,17 @@ elif module == "⚖️  Comparador de Modelos":
         value="Explica la diferencia entre BPE, WordPiece y SentencePiece en 3 puntos cada uno.", height=90)
 
     if st.button("⚡ Comparar modelos", key="run_compare", use_container_width=True) and cmp_query.strip():
-        if not models_to_compare and not (include_claude and claude_model_for_cmp):
+        if not models_to_compare:
             st.warning("Selecciona al menos un modelo."); st.stop()
         results_compare = {}
-        total_calls = len(models_to_compare) + (1 if (include_claude and claude_model_for_cmp) else 0)
         progress = st.progress(0, text="Iniciando comparación...")
         for i, model in enumerate(models_to_compare):
-            progress.progress(i / total_calls, text=f"Consultando {MODEL_META[model]['family']}...")
+            progress.progress(i / len(models_to_compare), text=f"Consultando {GROQ_MODELS[model]['family']}...")
             r = call_groq(client=client, model=model,
                           messages=[{"role": "system", "content": cmp_system}, {"role": "user", "content": cmp_query}],
                           temperature=cmp_temperature, max_tokens=cmp_max_tokens, top_p=cmp_top_p)
             results_compare[model] = r
             time.sleep(0.2)
-        if include_claude and claude_model_for_cmp:
-            progress.progress(len(models_to_compare) / total_calls, text=f"Consultando {ANTHROPIC_MODELS[claude_model_for_cmp]['family']} (de pago)...")
-            claude_client = get_anthropic_client(anthropic_key)
-            r_claude = call_anthropic(client=claude_client, model=claude_model_for_cmp,
-                                       messages=[{"role": "user", "content": cmp_query}], system=cmp_system,
-                                       temperature=cmp_temperature, max_tokens=cmp_max_tokens)
-            results_compare[claude_model_for_cmp] = r_claude
         progress.progress(1.0, text="✅ Comparación completada")
 
         successful = {m: r for m, r in results_compare.items() if r.get("success")}
@@ -1845,7 +1530,7 @@ elif module == "⚖️  Comparador de Modelos":
         if failed:
             st.markdown("### ⚠️ Errores")
             for model, result in failed.items():
-                st.markdown(f'<div class="warn-box"><b>❌ {MODEL_META[model]["family"]}</b><br><code style="font-size:0.8rem;">{result.get("error","")}</code></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="warn-box"><b>❌ {GROQ_MODELS[model]["family"]}</b><br><code style="font-size:0.8rem;">{result.get("error","")}</code></div>', unsafe_allow_html=True)
         if not successful:
             st.error("Ningún modelo respondió correctamente."); st.stop()
 
@@ -1853,10 +1538,10 @@ elif module == "⚖️  Comparador de Modelos":
         metric_cols = st.columns(max(1, len(successful)))
         for col, (model, result) in zip(metric_cols, successful.items()):
             with col:
-                mc = MODEL_META[model]["color"]
+                mc = GROQ_MODELS[model]["color"]
                 st.markdown(f"""
                 <div class="metric-card" style="border-color:{mc};">
-                <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{mc};">{MODEL_META[model]['family']}</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{mc};">{GROQ_MODELS[model]['family']}</div>
                 <div class="metric-value" style="color:{mc};font-size:1.3rem;">{result['latency']:.2f}s</div>
                 <div class="metric-label">Latencia</div>
                 <div style="margin-top:0.4rem;font-size:0.8rem;color:#8b949e;">
@@ -1866,9 +1551,9 @@ elif module == "⚖️  Comparador de Modelos":
 
         if len(successful) >= 2:
             fig_speed = go.Figure()
-            labels = [MODEL_META[m]['family'] for m in successful]
+            labels = [GROQ_MODELS[m]['family'] for m in successful]
             fig_speed.add_trace(go.Bar(name="Latencia (s)", x=labels, y=[r["latency"] for r in successful.values()],
-                                        marker_color=[MODEL_META[m]["color"] for m in successful], opacity=0.85))
+                                        marker_color=[GROQ_MODELS[m]["color"] for m in successful], opacity=0.85))
             fig_speed.add_trace(go.Scatter(name="Tokens/s", x=labels, y=[r["tokens_per_sec"] for r in successful.values()],
                                             mode="markers+lines", marker=dict(size=10, color="#ffffff"),
                                             line=dict(color="#ffffff", dash="dot"), yaxis="y2"))
@@ -1881,15 +1566,87 @@ elif module == "⚖️  Comparador de Modelos":
         resp_cols = st.columns(max(1, len(successful)))
         for col, (model, result) in zip(resp_cols, successful.items()):
             with col:
-                mc = MODEL_META[model]["color"]
-                st.markdown(f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{mc};font-weight:600;">{MODEL_META[model]["family"]}</div>', unsafe_allow_html=True)
+                mc = GROQ_MODELS[model]["color"]
+                st.markdown(f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{mc};font-weight:600;">{GROQ_MODELS[model]["family"]}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="llm-response" style="font-size:0.82rem;">{result.get("content","") or "*(sin respuesta)*"}</div>', unsafe_allow_html=True)
 
-        df_tokens = pd.DataFrame([{"Modelo": MODEL_META[m]["family"], "Prompt tokens": r["usage"]["prompt_tokens"],
+        df_tokens = pd.DataFrame([{"Modelo": GROQ_MODELS[m]["family"], "Prompt tokens": r["usage"]["prompt_tokens"],
                                     "Output tokens": r["usage"]["completion_tokens"], "Tokens/s": round(r["tokens_per_sec"], 1),
                                     "Latencia (s)": round(r["latency"], 3)} for m, r in successful.items()])
         st.markdown("### 📋 Tabla de Uso de Tokens")
         st.dataframe(df_tokens, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════
+# MODULE 7: BENCHMARK DE VELOCIDAD
+# ════════════════════════════════════════════════════════════
+elif module == "📊  Benchmark de Velocidad":
+    st.markdown('<div class="section-title">Benchmark de Latencia y Throughput</div>', unsafe_allow_html=True)
+    if not api_key:
+        st.markdown('<div class="warn-box">⚠️ Se requiere Groq API Key.</div>', unsafe_allow_html=True)
+        st.stop()
+    client = get_groq_client(api_key)
+
+    st.markdown("""
+    <div class="info-box">
+    Ejecuta múltiples llamadas al mismo modelo para medir la <b>distribución estadística de latencia</b>
+    (no solo el promedio). En producción, importan el percentil P95/P99, no solo la media.
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_bm1, col_bm2 = st.columns(2)
+    bm_model = col_bm1.selectbox("Modelo a benchmarkear:", list(GROQ_MODELS.keys()),
+                                  format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})")
+    n_runs = col_bm2.slider("Número de llamadas:", 3, 15, 5)
+    bm_prompt = st.text_area("Prompt del benchmark:",
+        value="Explica en exactamente 3 oraciones qué es el mecanismo de atención en los Transformers.", height=80)
+    bm_max_tokens = st.slider("max_tokens para benchmark:", 50, 500, 150, 25)
+
+    if st.button("🏁 Iniciar Benchmark", key="bm_run", use_container_width=True):
+        latencies, tok_per_sec_list, output_tokens_list = [], [], []
+        progress_bm = st.progress(0, text="Ejecutando benchmark...")
+        messages_bm = [{"role": "user", "content": bm_prompt}]
+        for i in range(n_runs):
+            progress_bm.progress((i + 1) / n_runs, text=f"Llamada {i+1}/{n_runs}...")
+            r = call_groq(client=client, model=bm_model, messages=messages_bm, temperature=0.0, max_tokens=bm_max_tokens)
+            if r["success"]:
+                latencies.append(r["latency"]); tok_per_sec_list.append(r["tokens_per_sec"]); output_tokens_list.append(r["usage"]["completion_tokens"])
+            time.sleep(0.1)
+        progress_bm.progress(1.0, text="✅ Benchmark completado")
+
+        if latencies:
+            col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
+            col_s1.metric("Media", f"{np.mean(latencies):.3f}s")
+            col_s2.metric("Mediana", f"{np.median(latencies):.3f}s")
+            col_s3.metric("P95", f"{np.percentile(latencies, 95):.3f}s")
+            col_s4.metric("Std Dev", f"{np.std(latencies):.3f}s")
+            col_s5.metric("Promedio tok/s", f"{np.mean(tok_per_sec_list):.0f}")
+
+            fig_bm = make_subplots(rows=1, cols=2, subplot_titles=("Distribución de Latencia", "Tokens/segundo por llamada"))
+            fig_bm.add_trace(go.Histogram(x=latencies, nbinsx=min(n_runs, 10), marker_color="#f0883e", opacity=0.85, name="Latencia"), row=1, col=1)
+            fig_bm.add_vline(x=np.mean(latencies), line_dash="dash", line_color="#58a6ff", annotation_text=f"Media: {np.mean(latencies):.3f}s", row=1, col=1)
+            fig_bm.add_vline(x=np.percentile(latencies, 95), line_dash="dot", line_color="#f85149", annotation_text=f"P95: {np.percentile(latencies,95):.3f}s", row=1, col=1)
+            fig_bm.add_trace(go.Scatter(x=list(range(1, len(tok_per_sec_list)+1)), y=tok_per_sec_list, mode="lines+markers",
+                                         marker=dict(color="#3fb950", size=8), line=dict(color="#3fb950"), name="Tokens/s"), row=1, col=2)
+            fig_bm.add_hline(y=np.mean(tok_per_sec_list), line_dash="dash", line_color="#58a6ff",
+                              annotation_text=f"Media: {np.mean(tok_per_sec_list):.0f} tok/s", row=1, col=2)
+            fig_bm.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3"), height=350, showlegend=False)
+            for axis in ['xaxis', 'yaxis', 'xaxis2', 'yaxis2']:
+                fig_bm.update_layout(**{f"{axis}_gridcolor": "#30363d"})
+            st.plotly_chart(fig_bm, use_container_width=True)
+
+            df_bm = pd.DataFrame({"Llamada": range(1, len(latencies)+1), "Latencia (s)": [round(l, 4) for l in latencies],
+                                   "Tokens/s": [round(t, 1) for t in tok_per_sec_list], "Output tokens": output_tokens_list})
+            st.dataframe(df_bm, use_container_width=True)
+
+            st.markdown(f"""
+            <div class="info-box">
+            <b>Análisis del Benchmark — {GROQ_MODELS[bm_model]['family']}:</b><br>
+            • Coeficiente de variación: {(np.std(latencies)/np.mean(latencies)*100):.1f}% (menor = más estable)<br>
+            • Overhead P95 vs media: +{((np.percentile(latencies,95)/np.mean(latencies)-1)*100):.1f}%<br>
+            • Para diseño de sistemas: usa P95 ({np.percentile(latencies,95):.3f}s) como SLA conservador, no la media.
+            </div>
+            """, unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════
@@ -1899,7 +1656,7 @@ elif module == "🎯  Attention Visualizer":
     st.markdown('<div class="section-title">Attention Visualizer: Entendiendo Qué Atiende el Modelo</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="info-box"><b>Proxy pedagógico:</b> este módulo aproxima la atención con similitud
-    de n-gramas de caracteres, no son los pesos reales de un Transformer (para eso: <code>pip install bertviz</code>).</div>
+    coseno de n-gramas de caracteres, no son los pesos reales de un Transformer.</div>
     <div class="formula-box">Attention(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V
 Para el token i, el score de atención hacia el token j:
 alpha(i,j) = softmax( q_i . k_j / sqrt(d_k) )</div>
@@ -1920,7 +1677,7 @@ alpha(i,j) = softmax( q_i . k_j / sqrt(d_k) )</div>
                 sim_attn = np.exp(sim_attn * 3)
                 sim_attn = sim_attn / sim_attn.sum(axis=1, keepdims=True)
 
-                fig_attn = px.imshow(sim_attn, x=tokens_attn, y=tokens_attn, title="Matriz de Atención Aproximada",
+                fig_attn = px.imshow(sim_attn, x=tokens_attn, y=tokens_attn, title="Matriz de Atención Aproximada (similitud coseno)",
                                       color_continuous_scale="Oranges", text_auto=".2f", aspect="auto")
                 fig_attn.update_layout(paper_bgcolor="#0d1117", plot_bgcolor="#161b22", font=dict(color="#e6edf3", size=11),
                                         height=max(300, n_toks * 25 + 100), xaxis=dict(tickangle=-45))
