@@ -1,4 +1,3 @@
-
 # ============================================================
 # EAFIT — Maestría en Ciencia de Datos
 # NLP & LLM Interactive Lab  (v2 — catálogo corregido, 2026)
@@ -45,6 +44,12 @@ try:
     GROQ_AVAILABLE = True
 except ImportError:
     GROQ_AVAILABLE = False
+
+try:
+    import anthropic as anthropic_sdk
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 try:
     import tiktoken
@@ -203,7 +208,35 @@ GROQ_MODELS = {
         "strengths": "Velocidad máxima, bajo costo. Ideal para benchmarks de latencia",
         "color": "#39d353"
     },
+    "deepseek-r1-distill-llama-70b": {
+        "family": "DeepSeek R1 Distill", "params": "70B", "context": 131_072,
+        "type": "Decoder-only · Reasoning (CoT destilado en LLaMA 70B)", "license": "MIT",
+        "strengths": "Razonamiento matemático/lógico de DeepSeek-R1, destilado en una base LLaMA. "
+                     "Gratis en el free tier de Groq (límites diarios más bajos que los demás modelos).",
+        "color": "#ffa657"
+    },
 }
+
+# ════════════════════════════════════════════════════════════
+# CATÁLOGO OPCIONAL — ANTHROPIC (Claude)
+# NO es gratuito: Anthropic no ofrece un tier gratuito de API como
+# Groq o Google AI Studio (solo créditos de prueba limitados al
+# crear la cuenta). Se incluye como comparación opcional, de pago,
+# requiere la propia API key de Anthropic del usuario.
+# ════════════════════════════════════════════════════════════
+ANTHROPIC_MODELS = {
+    "claude-haiku-4-5-20251001": {
+        "family": "Claude Haiku 4.5", "params": "No divulgado", "context": 200_000,
+        "type": "Decoder-only (propietario)", "license": "Propietaria — de pago",
+        "strengths": "El modelo Claude más económico disponible; útil como referencia de un LLM "
+                     "propietario frente a los open-weight servidos por Groq.",
+        "color": "#d2a8ff"
+    },
+}
+
+# Vista combinada solo para metadatos de presentación (color, familia, params) —
+# las llamadas reales siguen yendo por call_groq() o call_anthropic() según el proveedor.
+MODEL_META = {**GROQ_MODELS, **ANTHROPIC_MODELS}
 
 # ════════════════════════════════════════════════════════════
 # CATÁLOGO DE MODELOS CLÁSICOS — cargados LOCALMENTE (HuggingFace)
@@ -444,6 +477,45 @@ def call_groq(
             "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
+def get_anthropic_client(api_key: str):
+    """Anthropic (Claude) — opcional, de pago. No hay tier gratuito de API."""
+    if not ANTHROPIC_AVAILABLE or not api_key:
+        return None
+    try:
+        return anthropic_sdk.Anthropic(api_key=api_key)
+    except Exception:
+        return None
+
+def call_anthropic(client, model: str, messages: list, system: str = "",
+                    temperature: float = 0.7, max_tokens: int = 1024) -> dict:
+    """
+    Wrapper de la API de Claude, con la misma forma de retorno que call_groq()
+    para que ambos proveedores se puedan comparar con el mismo código de UI.
+    `messages` debe traer solo turnos user/assistant; el system prompt va aparte.
+    """
+    if client is None:
+        return {"success": False, "error": "Cliente Anthropic no inicializado. Verifica tu API Key.",
+                "latency": 0, "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+    t0 = time.perf_counter()
+    try:
+        response = client.messages.create(
+            model=model, max_tokens=int(max_tokens), temperature=float(temperature),
+            system=system or "", messages=messages,
+        )
+        latency = time.perf_counter() - t0
+        content = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+        usage = {
+            "prompt_tokens": response.usage.input_tokens,
+            "completion_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+        }
+        tokens_per_sec = usage["completion_tokens"] / latency if latency > 0 else 0
+        return {"success": True, "content": content, "usage": usage, "latency": latency,
+                "tokens_per_sec": tokens_per_sec, "finish_reason": response.stop_reason, "model": model}
+    except Exception as e:
+        return {"success": False, "error": str(e), "latency": time.perf_counter() - t0,
+                "content": "", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+
 def cosine_sim_matrix(embeddings: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1e-10, norms)
@@ -649,6 +721,19 @@ with st.sidebar:
         st.markdown('<div class="warn-box" style="font-size:0.75rem;">⚠️ Sin API Key — módulos que llaman a Groq quedan deshabilitados. Los módulos locales (tokenización, embeddings, modelos clásicos) funcionan igual.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr style="border-color:#30363d;margin:0.8rem 0;">', unsafe_allow_html=True)
+    st.markdown('<p style="font-family:\'JetBrains Mono\',monospace;font-size:0.75rem;color:#8b949e;">🟣 ANTHROPIC API KEY (opcional, de pago)</p>', unsafe_allow_html=True)
+    anthropic_key_env = os.environ.get("ANTHROPIC_API_KEY", "")
+    anthropic_key_input = st.text_input(
+        "Anthropic API Key", value=anthropic_key_env, type="password", placeholder="sk-ant-...",
+        label_visibility="collapsed", help="A diferencia de Groq, Anthropic NO tiene tier gratuito de API."
+    )
+    anthropic_key = anthropic_key_input or anthropic_key_env
+    if anthropic_key:
+        st.markdown('<div class="success-box" style="font-size:0.72rem;">✅ Claude habilitado como comparación opcional</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="info-box" style="font-size:0.72rem;">ℹ️ Opcional. Anthropic no ofrece API gratuita (solo créditos de prueba al crear cuenta) — a diferencia de Groq, aquí sí se cobra por token desde el primer uso.</div>', unsafe_allow_html=True)
+
+    st.markdown('<hr style="border-color:#30363d;margin:0.8rem 0;">', unsafe_allow_html=True)
     st.markdown('<p style="font-family:\'JetBrains Mono\',monospace;font-size:0.75rem;color:#8b949e;">📍 MÓDULO ACTIVO</p>', unsafe_allow_html=True)
     module = st.selectbox(
         "Módulo",
@@ -789,7 +874,17 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
         <div class="info-box">
         <b>💡 ¿Por qué Groq?</b> Usa hardware <b>LPU (Language Processing Unit)</b> especializado,
         con velocidades de inferencia 10–100x superiores a GPUs convencionales:
-        típicamente 200–800+ tokens/segundo.
+        típicamente 200–800+ tokens/segundo. Además de LLaMA/GPT-OSS/Qwen3, Groq también sirve
+        <b>DeepSeek R1 Distill</b> (incluido en el catálogo de arriba) totalmente gratis, con
+        límites diarios más ajustados que los demás modelos.
+        </div>
+        <div class="warn-box">
+        <b>🟣 ¿Y Claude (Anthropic)?</b> A diferencia de Groq, Google AI Studio o Cloudflare
+        Workers AI, <b>Anthropic no ofrece un tier gratuito de API</b> — solo créditos de prueba
+        limitados al crear la cuenta, luego se cobra por token desde el primer uso. Por eso Claude
+        no está en el catálogo gratuito de arriba: se añadió como opción <b>opcional y de pago</b>
+        (clave de Anthropic propia) únicamente en el módulo <b>Comparador de Modelos</b>, para
+        contrastar un LLM propietario cerrado contra los open-weight servidos por Groq.
         </div>
         """, unsafe_allow_html=True)
 
@@ -1686,10 +1781,25 @@ elif module == "⚖️  Comparador de Modelos":
     client = get_groq_client(api_key)
 
     models_to_compare = st.multiselect(
-        "Selecciona modelos a comparar (máximo 4):", options=list(GROQ_MODELS.keys()),
+        "Selecciona modelos Groq a comparar (máximo 4, todos gratis):", options=list(GROQ_MODELS.keys()),
         default=["llama-3.1-8b-instant", "openai/gpt-oss-20b", "qwen/qwen3-32b"],
-        format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})", max_selections=4
+        format_func=lambda m: f"{MODEL_META[m]['family']} ({MODEL_META[m]['params']})", max_selections=4
     )
+
+    include_claude = st.checkbox(
+        "🟣 Incluir Claude (Anthropic) en la comparación — opcional, de pago, requiere tu propia API key",
+        value=False,
+        disabled=not anthropic_key,
+        help="Ingresa tu Anthropic API Key en la barra lateral para habilitar esta opción."
+    )
+    if include_claude and not anthropic_key:
+        st.caption("Ingresa una Anthropic API Key en la barra lateral para habilitarlo.")
+    claude_model_for_cmp = None
+    if include_claude and anthropic_key:
+        claude_model_for_cmp = st.selectbox(
+            "Modelo Claude:", list(ANTHROPIC_MODELS.keys()),
+            format_func=lambda m: f"{ANTHROPIC_MODELS[m]['family']} — de pago", key="cmp_claude_model"
+        )
     col_p1, col_p2, col_p3 = st.columns(3)
     cmp_temperature = col_p1.slider("temperature", 0.0, 2.0, 0.7, 0.1, key="cmp_t")
     cmp_max_tokens = col_p2.slider("max_tokens", 50, 2048, 400, 50, key="cmp_mt")
@@ -1700,17 +1810,25 @@ elif module == "⚖️  Comparador de Modelos":
         value="Explica la diferencia entre BPE, WordPiece y SentencePiece en 3 puntos cada uno.", height=90)
 
     if st.button("⚡ Comparar modelos", key="run_compare", use_container_width=True) and cmp_query.strip():
-        if not models_to_compare:
+        if not models_to_compare and not (include_claude and claude_model_for_cmp):
             st.warning("Selecciona al menos un modelo."); st.stop()
         results_compare = {}
+        total_calls = len(models_to_compare) + (1 if (include_claude and claude_model_for_cmp) else 0)
         progress = st.progress(0, text="Iniciando comparación...")
         for i, model in enumerate(models_to_compare):
-            progress.progress(i / len(models_to_compare), text=f"Consultando {GROQ_MODELS[model]['family']}...")
+            progress.progress(i / total_calls, text=f"Consultando {MODEL_META[model]['family']}...")
             r = call_groq(client=client, model=model,
                           messages=[{"role": "system", "content": cmp_system}, {"role": "user", "content": cmp_query}],
                           temperature=cmp_temperature, max_tokens=cmp_max_tokens, top_p=cmp_top_p)
             results_compare[model] = r
             time.sleep(0.2)
+        if include_claude and claude_model_for_cmp:
+            progress.progress(len(models_to_compare) / total_calls, text=f"Consultando {ANTHROPIC_MODELS[claude_model_for_cmp]['family']} (de pago)...")
+            claude_client = get_anthropic_client(anthropic_key)
+            r_claude = call_anthropic(client=claude_client, model=claude_model_for_cmp,
+                                       messages=[{"role": "user", "content": cmp_query}], system=cmp_system,
+                                       temperature=cmp_temperature, max_tokens=cmp_max_tokens)
+            results_compare[claude_model_for_cmp] = r_claude
         progress.progress(1.0, text="✅ Comparación completada")
 
         successful = {m: r for m, r in results_compare.items() if r.get("success")}
@@ -1718,7 +1836,7 @@ elif module == "⚖️  Comparador de Modelos":
         if failed:
             st.markdown("### ⚠️ Errores")
             for model, result in failed.items():
-                st.markdown(f'<div class="warn-box"><b>❌ {GROQ_MODELS[model]["family"]}</b><br><code style="font-size:0.8rem;">{result.get("error","")}</code></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="warn-box"><b>❌ {MODEL_META[model]["family"]}</b><br><code style="font-size:0.8rem;">{result.get("error","")}</code></div>', unsafe_allow_html=True)
         if not successful:
             st.error("Ningún modelo respondió correctamente."); st.stop()
 
@@ -1726,10 +1844,10 @@ elif module == "⚖️  Comparador de Modelos":
         metric_cols = st.columns(max(1, len(successful)))
         for col, (model, result) in zip(metric_cols, successful.items()):
             with col:
-                mc = GROQ_MODELS[model]["color"]
+                mc = MODEL_META[model]["color"]
                 st.markdown(f"""
                 <div class="metric-card" style="border-color:{mc};">
-                <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{mc};">{GROQ_MODELS[model]['family']}</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:{mc};">{MODEL_META[model]['family']}</div>
                 <div class="metric-value" style="color:{mc};font-size:1.3rem;">{result['latency']:.2f}s</div>
                 <div class="metric-label">Latencia</div>
                 <div style="margin-top:0.4rem;font-size:0.8rem;color:#8b949e;">
@@ -1739,9 +1857,9 @@ elif module == "⚖️  Comparador de Modelos":
 
         if len(successful) >= 2:
             fig_speed = go.Figure()
-            labels = [GROQ_MODELS[m]['family'] for m in successful]
+            labels = [MODEL_META[m]['family'] for m in successful]
             fig_speed.add_trace(go.Bar(name="Latencia (s)", x=labels, y=[r["latency"] for r in successful.values()],
-                                        marker_color=[GROQ_MODELS[m]["color"] for m in successful], opacity=0.85))
+                                        marker_color=[MODEL_META[m]["color"] for m in successful], opacity=0.85))
             fig_speed.add_trace(go.Scatter(name="Tokens/s", x=labels, y=[r["tokens_per_sec"] for r in successful.values()],
                                             mode="markers+lines", marker=dict(size=10, color="#ffffff"),
                                             line=dict(color="#ffffff", dash="dot"), yaxis="y2"))
@@ -1754,11 +1872,11 @@ elif module == "⚖️  Comparador de Modelos":
         resp_cols = st.columns(max(1, len(successful)))
         for col, (model, result) in zip(resp_cols, successful.items()):
             with col:
-                mc = GROQ_MODELS[model]["color"]
-                st.markdown(f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{mc};font-weight:600;">{GROQ_MODELS[model]["family"]}</div>', unsafe_allow_html=True)
+                mc = MODEL_META[model]["color"]
+                st.markdown(f'<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.72rem;color:{mc};font-weight:600;">{MODEL_META[model]["family"]}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="llm-response" style="font-size:0.82rem;">{result.get("content","") or "*(sin respuesta)*"}</div>', unsafe_allow_html=True)
 
-        df_tokens = pd.DataFrame([{"Modelo": GROQ_MODELS[m]["family"], "Prompt tokens": r["usage"]["prompt_tokens"],
+        df_tokens = pd.DataFrame([{"Modelo": MODEL_META[m]["family"], "Prompt tokens": r["usage"]["prompt_tokens"],
                                     "Output tokens": r["usage"]["completion_tokens"], "Tokens/s": round(r["tokens_per_sec"], 1),
                                     "Latencia (s)": round(r["latency"], 3)} for m, r in successful.items()])
         st.markdown("### 📋 Tabla de Uso de Tokens")
