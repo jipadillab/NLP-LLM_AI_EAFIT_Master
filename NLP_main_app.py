@@ -368,60 +368,48 @@ div[data-testid="stExpander"] {
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════
-# CONSTANTS & MODEL CATALOG
+# CONSTANTS & MODEL CATALOG (Actualizado a Sep 2026)
 # ════════════════════════════════════════════════════════════
 
 GROQ_MODELS = {
-    # ── Production Models ──
+    # ── Modelos Abiertos (Disponibles en Tier Gratuito) ──
+    "openai/gpt-oss-120b": {
+        "family": "GPT-OSS", "params": "120B", "context": 128_000,
+        "type": "MoE Decoder", "license": "Open Weights",
+        "strengths": "Razonamiento complejo, ejecución de código, flujos agénticos",
+        "color": "#f0883e"
+    },
+    "openai/gpt-oss-20b": {
+        "family": "GPT-OSS", "params": "20B", "context": 128_000,
+        "type": "MoE Decoder", "license": "Open Weights",
+        "strengths": "Tareas cotidianas, ultra baja latencia, gran relación costo/beneficio",
+        "color": "#58a6ff"
+    },
+    "qwen/qwen3-32b": {
+        "family": "Qwen 3", "params": "32B", "context": 128_000,
+        "type": "Decoder-only", "license": "Apache 2.0",
+        "strengths": "Excelente multilingüismo, razonamiento y código (Alibaba Cloud)",
+        "color": "#3fb950"
+    },
+    # ── Modelos Enterprise (Requieren Tier Enterprise de Groq) ──
     "llama-3.3-70b-versatile": {
         "family": "LLaMA 3.3", "params": "70B", "context": 128_000,
         "type": "Decoder-only", "license": "Meta Community",
-        "strengths": "Razonamiento general, instrucciones complejas, multilingual",
-        "color": "#f0883e"
+        "strengths": "Razonamiento avanzado, seguimiento estricto de instrucciones (Enterprise)",
+        "color": "#bc8cff"
+    },
+    "llama-4-scout-17b-16e-instruct": {
+        "family": "LLaMA 4 Scout", "params": "17B", "context": 128_000,
+        "type": "MoE", "license": "Meta Community",
+        "strengths": "Eficiencia extrema, balance calidad/velocidad (Enterprise)",
+        "color": "#39d353"
     },
     "llama-3.1-8b-instant": {
         "family": "LLaMA 3.1", "params": "8B", "context": 128_000,
         "type": "Decoder-only", "license": "Meta Community",
-        "strengths": "Velocidad máxima, bajo costo, buen rendimiento general",
-        "color": "#58a6ff"
-    },
-    "llama-3.1-70b-versatile": {
-        "family": "LLaMA 3.1", "params": "70B", "context": 128_000,
-        "type": "Decoder-only", "license": "Meta Community",
-        "strengths": "Razonamiento avanzado, contexto largo, instrucciones",
-        "color": "#3fb950"
-    },
-    "mixtral-8x7b-32768": {
-        "family": "Mixtral MoE", "params": "8x7B (47B total, 13B activos)", "context": 32_768,
-        "type": "Decoder MoE", "license": "Apache 2.0",
-        "strengths": "Mixture of Experts: 8 expertos, activa 2 por token. Eficiencia vs calidad",
-        "color": "#bc8cff"
-    },
-    "gemma2-9b-it": {
-        "family": "Gemma 2", "params": "9B", "context": 8_192,
-        "type": "Decoder-only", "license": "Gemma Terms",
-        "strengths": "Google architecture, eficiente, bueno en instrucciones cortas",
-        "color": "#39d353"
-    },
-    "llama-guard-3-8b": {
-        "family": "LLaMA Guard", "params": "8B", "context": 8_192,
-        "type": "Clasificador de seguridad", "license": "Meta Community",
-        "strengths": "Clasificación de contenido dañino, guardrails de seguridad",
-        "color": "#f85149"
-    },
-    # ── Preview / Experimental ──
-    "deepseek-r1-distill-llama-70b": {
-        "family": "DeepSeek R1 Distill", "params": "70B", "context": 128_000,
-        "type": "Reasoning (CoT interno)", "license": "MIT",
-        "strengths": "Razonamiento extendido, matemáticas, cadenas de pensamiento visibles",
-        "color": "#ffa657"
-    },
-    "qwen-qwq-32b": {
-        "family": "Qwen QwQ", "params": "32B", "context": 128_000,
-        "type": "Reasoning", "license": "Apache 2.0",
-        "strengths": "Razonamiento matemático y lógico, Alibaba Cloud",
-        "color": "#d2a8ff"
-    },
+        "strengths": "Velocidad máxima para prototipado rápido (Enterprise)",
+        "color": "#ff7b72"
+    }
 }
 
 # Default sample texts for each module
@@ -441,7 +429,7 @@ to attend to all other tokens simultaneously, enabling parallelization impossibl
     "mixed": """El Transformer architecture introduced by Vaswani et al. (2017) propone que 
 "Attention is all you need." Esta arquitectura utiliza self-attention con matrices Q, K, V 
 para calcular: Attention(Q,K,V) = softmax(QK^T / sqrt(d_k)) * V. 
-Los LLMs como LLaMA-3.1 tienen 70B parámetros y contextos de 128k tokens."""
+Los LLMs actuales como GPT-OSS 120B tienen arquitecturas MoE y contextos de 128k tokens."""
 }
 
 # ════════════════════════════════════════════════════════════
@@ -826,9 +814,9 @@ if module == "🏠  Inicio & Teoría":
             <div class="metric-label">Módulos interactivos</div>
         </div>""", unsafe_allow_html=True)
     with col2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="metric-card">
-            <div class="metric-value" style="color:#58a6ff;">8</div>
+            <div class="metric-value" style="color:#58a6ff;">{len(GROQ_MODELS)}</div>
             <div class="metric-label">Modelos Groq disponibles</div>
         </div>""", unsafe_allow_html=True)
     with col3:
@@ -949,26 +937,36 @@ if module == "🏠  Inicio & Teoría":
         </div>
         """, unsafe_allow_html=True)
         
-        # Architecture comparison chart
+        # Architecture comparison chart (Dynamically parsed)
         fig = go.Figure()
-        model_names = [GROQ_MODELS[m]["family"] for m in list(GROQ_MODELS.keys())[:6]]
-        params_raw = ["70", "8", "70", "47", "9", "70"]
-        params_num = [float(p) for p in params_raw]
-        contexts = [GROQ_MODELS[m]["context"] for m in list(GROQ_MODELS.keys())[:6]]
-        colors = [GROQ_MODELS[m]["color"] for m in list(GROQ_MODELS.keys())[:6]]
+        model_keys = list(GROQ_MODELS.keys())
+        model_names = [GROQ_MODELS[m]["family"] for m in model_keys]
+        
+        # Función para extraer el peso númerico del string para la gráfica
+        def parse_params(param_str):
+            nums = re.findall(r'\d+', param_str)
+            if "x" in param_str.lower() and len(nums) >= 2:
+                return float(nums[0]) * float(nums[1])
+            elif nums:
+                return float(nums[0])
+            return 10.0
+
+        params_num = [parse_params(GROQ_MODELS[m]["params"]) for m in model_keys]
+        contexts = [GROQ_MODELS[m]["context"] for m in model_keys]
+        colors = [GROQ_MODELS[m]["color"] for m in model_keys]
         
         fig.add_trace(go.Scatter(
             x=params_num, y=[c/1000 for c in contexts],
             mode="markers+text",
             text=model_names,
             textposition="top center",
-            marker=dict(size=[p/3+8 for p in params_num], color=colors, opacity=0.85,
-                       line=dict(color="#30363d", width=1)),
+            marker=dict(size=[(p/3)+8 for p in params_num], color=colors, opacity=0.85,
+                        line=dict(color="#30363d", width=1)),
             hovertemplate="<b>%{text}</b><br>Params: %{x}B<br>Contexto: %{y}k tokens<extra></extra>"
         ))
         fig.update_layout(
             title="Parámetros vs Contexto — Modelos Groq",
-            xaxis_title="Parámetros (B)", yaxis_title="Contexto (k tokens)",
+            xaxis_title="Parámetros equivalentes (B)", yaxis_title="Contexto (k tokens)",
             paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
             font=dict(color="#e6edf3", family="DM Sans"),
             title_font=dict(size=14),
@@ -1801,7 +1799,7 @@ elif module == "🏷️  NLP Clásico (POS, NER, Sentimientos)":
             for sentence in sent_list:
                 scores = sia.polarity_scores(sentence)
                 sentiment = "Positivo" if scores["compound"] >= 0.05 else \
-                           "Negativo" if scores["compound"] <= -0.05 else "Neutro"
+                            "Negativo" if scores["compound"] <= -0.05 else "Neutro"
                 results_sent.append({
                     "Texto": sentence[:60] + ("..." if len(sentence) > 60 else ""),
                     "Positivo": round(scores["pos"], 3),
@@ -1837,7 +1835,7 @@ elif module == "🏷️  NLP Clásico (POS, NER, Sentimientos)":
                 xaxis=dict(tickangle=-30, gridcolor="#30363d"),
                 yaxis=dict(title="Score 0–1", gridcolor="#30363d"),
                 yaxis2=dict(title="Compound -1/+1", overlaying="y", side="right",
-                           gridcolor="#30363d"),
+                            gridcolor="#30363d"),
                 legend=dict(bgcolor="#161b22", bordercolor="#30363d", borderwidth=1)
             )
             st.plotly_chart(fig_sent, use_container_width=True)
@@ -2065,7 +2063,7 @@ elif module == "⚡  LLM Lab — Parámetros":
         col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
         run_btn = col_btn1.button("⚡ Generar", key="run_gen", use_container_width=True)
         run_x3 = col_btn2.button("🔄 Generar ×3", key="run_x3", use_container_width=True,
-                                  help="Genera 3 respuestas con los mismos parámetros para ver variabilidad")
+                                 help="Genera 3 respuestas con los mismos parámetros para ver variabilidad")
         
         if run_btn and user_query.strip():
             messages = [
@@ -2191,7 +2189,7 @@ elif module == "⚖️  Comparador de Modelos":
     models_to_compare = st.multiselect(
         "Selecciona modelos a comparar (máximo 4):",
         options=list(GROQ_MODELS.keys()),
-        default=["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+        default=["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3-32b"],
         format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})",
         max_selections=4
     )
@@ -2838,7 +2836,7 @@ Explica el mecanismo de Multi-Head Attention a un estudiante de primer año de m
   "score_general": number entre 0 y 10
 }
 
-Modelo a analizar: LLaMA 3.1 70B""",
+Modelo a analizar: LLaMA 3.1 8B""",
                 "when": "Integración con código, APIs, parseo automático de respuestas."
             },
             "ReAct (Reason + Act)": {
