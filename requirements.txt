@@ -1,9 +1,22 @@
 # ============================================================
 # NLP & LLM Interactive Lab — EAFIT
-# requirements.txt
+# requirements.txt  (sin PyTorch / torchvision / transformers)
 # ============================================================
 # Instalación local:   pip install -r requirements.txt
-# Streamlit Cloud:      sube este archivo junto a main_app.py
+# Streamlit Cloud:      sube este archivo + main_app.py + .streamlit/config.toml
+#
+# POR QUÉ NO HAY torch / torchvision / transformers / sentence-transformers:
+# El *file watcher* de Streamlit recorre todos los submódulos internos de
+# `transformers` (incluye modelos de visión como ViTMatte/ViTPose/YOLOS/
+# ZoeDepth), y cada uno dispara `ModuleNotFoundError: No module named
+# 'torchvision'` en los logs aunque esta app nunca los use — un problema
+# de interacción Streamlit + HuggingFace difícil de silenciar del todo.
+# La solución robusta es no depender de esas librerías: se reemplazan por
+# alternativas equivalentes, 100% CPU, SIN PyTorch:
+#   • tiktoken   → tokenización BPE (incluye GPT-2 original y cl100k)
+#   • tokenizers → tokenización WordPiece (BERT), pura Rust, sin PyTorch
+#   • fastembed  → embeddings densos vía ONNX Runtime, sin PyTorch
+# ============================================================
 
 # --- Core app ---
 streamlit>=1.38,<2.0
@@ -22,33 +35,27 @@ groq>=0.11,<1.0
 anthropic>=0.34,<1.0
 
 # --- Tokenización ---
-tiktoken>=0.7,<1.0          # BPE (cl100k, referencia GPT-3.5/4)
+tiktoken>=0.7,<1.0            # BPE: cl100k (ref. GPT-3.5/4) Y "gpt2" (BPE original, 2019)
+tokenizers>=0.19,<1.0         # WordPiece de BERT — Rust puro, CERO dependencia de PyTorch
 
 # --- NLP clásico ---
-nltk>=3.9,<4.0               # POS, NER, VADER sentiment, n-gramas
+nltk>=3.9,<4.0                 # POS, NER, VADER sentiment, n-gramas
 
 # --- Embeddings, TF-IDF y proyecciones ---
-scikit-learn>=1.4,<2.0       # TF-IDF, cosine_similarity, TruncatedSVD (PCA-like)
-sentence-transformers>=3.0,<4.0   # all-MiniLM-L6-v2 / bge-m3 / nomic-embed-text
-einops>=0.7                  # requerido por nomic-embed-text (trust_remote_code)
-
-# --- Modelos clásicos locales (GPT-2, BERT, RoBERTa) ---
-transformers>=4.44,<5.0
-torch>=2.2,<3.0              # backend CPU para transformers/sentence-transformers
-# NOTA: NO se necesita torchvision — este lab solo usa modelos de TEXTO
-# (GPT-2, BERT, RoBERTa). El ModuleNotFoundError de torchvision que puede
-# verse en los logs viene del file-watcher de Streamlit, no de la app en
-# sí; se resuelve con .streamlit/config.toml (fileWatcherType = "none"),
-# incluido en este proyecto.
+scikit-learn>=1.4,<2.0         # TF-IDF, cosine_similarity, TruncatedSVD (PCA-like)
+fastembed>=0.3,<1.0            # all-MiniLM-L6-v2 / bge-m3 / nomic-embed-text vía ONNX Runtime
 
 # ============================================================
 # NOTAS:
-# - torch se instala en versión CPU por defecto desde PyPI; en
-#   Streamlit Community Cloud esto es lo esperado (no hay GPU).
-# - bge-m3 y nomic-embed-text se descargan la primera vez que se
-#   usan (cientos de MB a ~2GB) — ten paciencia en la demo en vivo,
-#   o pre-descárgalos antes de clase.
-# - Si vas a desplegar solo el subconjunto de módulos que usan Groq
-#   (sin modelos clásicos locales), puedes omitir `torch` y
-#   `transformers` y comentar el módulo "Modelos Clásicos vs Modernos".
+# - Esta app NO ejecuta pesos de GPT-2/BERT en vivo (solo su tokenización,
+#   que sí es real y en vivo). Ver el módulo "Modelos Clásicos vs
+#   Modernos" para el porqué y la alternativa ilustrativa usada.
+# - Si en tu propio entorno (fuera de Streamlit Cloud) SÍ quieres correr
+#   inferencia real de GPT-2/BERT, puedes instalar por separado:
+#     pip install transformers torch torchvision
+#   y adaptar las funciones load_bert_tokenizer/load_embedding_model,
+#   pero eso reintroduce el problema del file watcher documentado arriba.
+# - bge-m3 y nomic-embed-text se descargan la primera vez que se usan
+#   (cientos de MB a ~2GB) — ten paciencia en la demo en vivo, o
+#   pre-descárgalos antes de clase.
 # ============================================================
