@@ -20,11 +20,25 @@
 # inferencia — solo sirve modelos "open-weight" modernos optimizados para
 # su hardware LPU. Por eso este laboratorio separa dos mundos:
 #   • Modelos MODERNOS → se consultan vía Groq API (requieren API key)
-#   • Modelos CLÁSICOS → se cargan LOCALMENTE con HuggingFace `transformers`
-#     (GPT-2, BERT, RoBERTa) para fines pedagógicos de comparación:
-#     tokenización, generación de baja calidad, embeddings no-contextuales.
+#   • Modelos CLÁSICOS → solo se usan para TOKENIZACIÓN y EMBEDDINGS,
+#     con librerías ligeras sin PyTorch (tiktoken, tokenizers, fastembed).
+#     No se ejecuta generación real de GPT-2/BERT en este laboratorio.
 # El catálogo de Groq cambia con frecuencia: verifica siempre
 # https://console.groq.com/docs/models antes de una clase en vivo.
+#
+# NOTA TÉCNICA SOBRE DEPENDENCIAS (importante si despliegas en Streamlit
+# Community Cloud): esta app NO usa `torch`, `torchvision` ni
+# `transformers`/`sentence-transformers` a propósito. Esas librerías
+# registran cientos de submódulos internos (incluidos modelos de visión
+# como ViTMatte/ViTPose/YOLOS) y el *file watcher* de Streamlit los
+# recorre todos al arrancar, disparando `ModuleNotFoundError: No module
+# named 'torchvision'` en los logs aunque la app nunca los use — un bug
+# de interacción Streamlit+HuggingFace bien documentado y molesto de
+# silenciar por completo. La solución robusta es no depender de esas
+# librerías: aquí se reemplazan por alternativas 100% CPU, sin PyTorch:
+#   • tiktoken   → tokenización BPE (GPT-2 y familia GPT-3.5/4)
+#   • tokenizers → tokenización WordPiece (BERT), sin PyTorch
+#   • fastembed  → embeddings densos vía ONNX Runtime, sin PyTorch
 # ============================================================
 
 import os
@@ -83,16 +97,16 @@ except Exception:
     SKLEARN_AVAILABLE = False
 
 try:
-    from sentence_transformers import SentenceTransformer
-    SBERT_AVAILABLE = True
+    from tokenizers import Tokenizer as HFTokenizer  # HuggingFace `tokenizers`, sin PyTorch
+    TOKENIZERS_AVAILABLE = True
 except Exception:
-    SBERT_AVAILABLE = False
+    TOKENIZERS_AVAILABLE = False
 
 try:
-    from transformers import AutoTokenizer, pipeline
-    TRANSFORMERS_AVAILABLE = True
+    from fastembed import TextEmbedding  # embeddings vía ONNX Runtime, sin PyTorch
+    FASTEMBED_AVAILABLE = True
 except Exception:
-    TRANSFORMERS_AVAILABLE = False
+    FASTEMBED_AVAILABLE = False
 
 # ════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -295,23 +309,22 @@ CLASSIC_MODELS = {
 EMBEDDING_MODELS = {
     "all-MiniLM-L6-v2": {
         "hf_id": "sentence-transformers/all-MiniLM-L6-v2",
-        "dims": 384, "context": 256, "size": "~90 MB", "trust_remote_code": False,
+        "dims": 384, "context": 256, "size": "~90 MB",
         "note": "Clásico, extremadamente ligero y rápido. Ideal para prototipos donde la "
                 "latencia es la prioridad. Entrenado principalmente en inglés (funciona en "
                 "español pero con pérdida de calidad).",
     },
     "bge-m3": {
         "hf_id": "BAAI/bge-m3",
-        "dims": 1024, "context": 8192, "size": "~2.2 GB", "trust_remote_code": False,
+        "dims": 1024, "context": 8192, "size": "~2.2 GB",
         "note": "BAAI. Uno de los más potentes para corpus multilingüe/técnico en español. "
-                "Soporta dense + sparse + multi-vector retrieval y contexto de 8192 tokens. "
-                "Descarga pesada: úsalo si tu conexión lo permite.",
+                "Contexto de 8192 tokens. Descarga pesada: úsalo si tu conexión lo permite.",
     },
     "nomic-embed-text": {
         "hf_id": "nomic-ai/nomic-embed-text-v1.5",
-        "dims": 768, "context": 8192, "size": "~550 MB", "trust_remote_code": True,
+        "dims": 768, "context": 8192, "size": "~550 MB",
         "note": "Nomic AI. El más popular para RAG con Groq en la comunidad open-source. "
-                "Requiere trust_remote_code=True y el paquete `einops`.",
+                "Contexto largo de 8192 tokens.",
     },
 }
 
@@ -354,48 +367,31 @@ está prohibido y será sancionado según el reglamento estudiantil vigente."""
 # HELPER FUNCTIONS
 # ════════════════════════════════════════════════════════════
 
-@st.cache_resource(show_spinner="⚙️ Cargando modelo de embeddings…")
-def load_sbert_model(model_key: str = "all-MiniLM-L6-v2"):
-    """Load a Sentence-Transformers model from the EMBEDDING_MODELS catalog (cached)."""
-    if not SBERT_AVAILABLE:
+@st.cache_resource(show_spinner="⚙️ Cargando modelo de embeddings (ONNX, sin PyTorch)…")
+def load_embedding_model(model_key: str = "all-MiniLM-L6-v2"):
+    """Load a fastembed (ONNX Runtime) text-embedding model from the EMBEDDING_MODELS catalog."""
+    if not FASTEMBED_AVAILABLE:
         return None
     info = EMBEDDING_MODELS.get(model_key)
     if info is None:
         return None
     try:
-        return SentenceTransformer(info["hf_id"], trust_remote_code=info["trust_remote_code"])
+        return TextEmbedding(model_name=info["hf_id"])
     except Exception as e:
         st.warning(f"No se pudo cargar {model_key}: {e}")
         return None
 
-@st.cache_resource(show_spinner="⚙️ Cargando tokenizador BERT…")
+def embed_texts(model, texts: list) -> np.ndarray:
+    """fastembed .embed() returns a generator of numpy arrays; materialize into a matrix."""
+    return np.array(list(model.embed(texts)))
+
+@st.cache_resource(show_spinner="⚙️ Cargando tokenizador BERT (WordPiece, sin PyTorch)…")
 def load_bert_tokenizer(model_name: str = "bert-base-multilingual-cased"):
-    if not TRANSFORMERS_AVAILABLE:
+    if not TOKENIZERS_AVAILABLE:
         return None
     try:
-        return AutoTokenizer.from_pretrained(model_name)
+        return HFTokenizer.from_pretrained(model_name)
     except Exception:
-        return None
-
-@st.cache_resource(show_spinner="⚙️ Cargando tokenizador GPT-2…")
-def load_gpt2_tokenizer():
-    if not TRANSFORMERS_AVAILABLE:
-        return None
-    try:
-        return AutoTokenizer.from_pretrained("gpt2")
-    except Exception:
-        return None
-
-@st.cache_resource(show_spinner="⚙️ Cargando modelo clásico local (puede tardar la 1ª vez)…")
-def load_classic_causal_lm(model_id: str):
-    """Load a small classic causal LM (GPT-2 family) fully locally, CPU-only."""
-    if not TRANSFORMERS_AVAILABLE:
-        return None
-    try:
-        gen = pipeline("text-generation", model=model_id, tokenizer=model_id, device=-1)
-        return gen
-    except Exception as e:
-        st.warning(f"No se pudo cargar {model_id}: {e}")
         return None
 
 def count_tokens_tiktoken(text: str, model: str = "gpt-3.5-turbo") -> int:
@@ -411,13 +407,18 @@ def count_tokens_tiktoken(text: str, model: str = "gpt-3.5-turbo") -> int:
         except Exception:
             return len(text.split())
 
-def tokenize_with_tiktoken(text: str):
-    """Returns (tokens, ids) using cl100k_base BPE (the family used by GPT-3.5/4-era encodings)."""
+def tokenize_with_tiktoken(text: str, encoding_name: str = "cl100k_base"):
+    """Returns (tokens, ids) using a tiktoken BPE encoding.
+
+    encoding_name="cl100k_base" -> BPE de referencia de GPT-3.5/4 (~100,277 vocab)
+    encoding_name="gpt2"        -> BPE ORIGINAL de GPT-2 (2019, 50,257 vocab),
+                                    sin ninguna dependencia de PyTorch/transformers.
+    """
     if not TIKTOKEN_AVAILABLE:
         toks = text.split()
         return toks, list(range(len(toks)))
     try:
-        enc = tiktoken.get_encoding("cl100k_base")
+        enc = tiktoken.get_encoding(encoding_name)
         token_ids = enc.encode(text)
         tokens = [enc.decode([t]) for t in token_ids]
         return tokens, token_ids
@@ -905,12 +906,15 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
         """, unsafe_allow_html=True)
 
     with tab_classic:
-        st.markdown('<div class="section-title" style="font-size:1.1rem;">Modelos Clásicos (se cargan localmente, no vía Groq)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="font-size:1.1rem;">Modelos Clásicos (tokenización en vivo, sin PyTorch)</div>', unsafe_allow_html=True)
         st.markdown("""
         <div class="info-box">
-        Groq no aloja GPT-2, BERT ni RoBERTa: solo sirve LLMs modernos "instruct". Para que puedas
-        <b>comparar la era pre-LLM con la era actual</b>, este laboratorio descarga estos modelos
-        clásicos directamente de HuggingFace y los ejecuta en CPU dentro de la app.
+        Groq no aloja GPT-2, BERT ni RoBERTa: solo sirve LLMs modernos "instruct". Para comparar la
+        era pre-LLM con la era actual sin arrastrar PyTorch/`transformers` completo (que en
+        Streamlit Cloud dispara errores de <code>torchvision</code> por sus módulos de visión no
+        usados), este laboratorio reproduce la <b>tokenización real</b> de GPT-2 y BERT con
+        librerías ligeras (<code>tiktoken</code>, <code>tokenizers</code>) y usa una comparación
+        <b>ilustrativa</b> —claramente marcada como tal— para la generación de texto.
         </div>
         """, unsafe_allow_html=True)
         rows_c = [{"Modelo": k, "Nombre": v["label"], "Año": v["year"], "Parámetros": v["params"],
@@ -919,10 +923,10 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
         st.dataframe(pd.DataFrame(rows_c), use_container_width=True, height=240)
         st.markdown("""
         <div class="warn-box">
-        <b>🎓 Valor pedagógico:</b> GPT-2 (124M parámetros) generará texto notablemente menos
-        coherente y con más alucinaciones que GPT-OSS-120B, no por mala suerte, sino porque tiene
-        ~1000x menos parámetros, sin RLHF ni instruction-tuning. Este contraste es el corazón del
-        módulo <b>"Modelos Clásicos vs Modernos"</b>.
+        <b>🎓 Valor pedagógico:</b> GPT-2 (124M parámetros) genera texto notablemente menos
+        coherente que GPT-OSS-120B, no por mala suerte, sino porque tiene ~1000x menos parámetros,
+        sin RLHF ni instruction-tuning. Este contraste es el corazón del módulo
+        <b>"Modelos Clásicos vs Modernos"</b>.
         </div>
         """, unsafe_allow_html=True)
 
@@ -933,7 +937,7 @@ A(Q,K,V) = softmax(QK^T / sqrt(d_k)) . V</div>
         st.dataframe(pd.DataFrame(rows_e), use_container_width=True, height=200)
         st.markdown("""
         <div class="info-box">
-        Estos tres modelos se usan localmente (vía <code>sentence-transformers</code>), no por Groq API
+        Estos tres modelos se usan localmente (vía <code>fastembed</code> / ONNX Runtime, sin PyTorch), no por Groq API
         — Groq no expone hoy un endpoint de embeddings propio para estos modelos, así que la práctica
         estándar en la comunidad es: <b>embeddings locales / HF Inference</b> + <b>generación vía Groq</b>.
         </div>
@@ -1032,22 +1036,15 @@ vocabulario ~2x más pequeño -> más tokens
 para el mismo texto.</div>
             """, unsafe_allow_html=True)
         with col_result:
-            gpt2_tok = load_gpt2_tokenizer()
-            if gpt2_tok:
-                try:
-                    enc2 = gpt2_tok(input_text, truncation=True, max_length=512)
-                    ids_g = enc2["input_ids"]
-                    toks_g = gpt2_tok.convert_ids_to_tokens(ids_g)
-                    toks_g_clean = [t.replace("Ġ", "·") for t in toks_g]  # Ġ = espacio precedente
-                    c1, c2 = st.columns(2)
-                    c1.metric("Tokens GPT-2", len(toks_g))
-                    c2.metric("Vocab size", "50,257")
-                    st.caption("`·` representa un espacio antes del token (carácter Ġ interno de GPT-2)")
-                    st.markdown(render_token_chips(toks_g_clean[:60], ids_g[:60]), unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"Error tokenizando con GPT-2: {e}")
-            else:
-                st.info("Cargando tokenizador GPT-2... (requiere descarga inicial ~1MB, solo el tokenizador)")
+            tokens_g, ids_g = tokenize_with_tiktoken(input_text, encoding_name="gpt2")
+            toks_g_clean = [t.replace("Ġ", "·").replace("\n", "⏎") for t in tokens_g]  # Ġ = espacio precedente
+            c1, c2 = st.columns(2)
+            c1.metric("Tokens GPT-2", len(tokens_g))
+            c2.metric("Vocab size", "50,257")
+            st.caption("`·` representa un espacio antes del token (carácter Ġ interno de GPT-2, byte-level BPE)")
+            st.markdown(render_token_chips(toks_g_clean[:60], ids_g[:60]), unsafe_allow_html=True)
+            if len(tokens_g) > 60:
+                st.caption(f"... mostrando primeros 60 de {len(tokens_g)} tokens")
 
     with tab_bert:
         col_explain, col_result = st.columns([1, 1])
@@ -1069,12 +1066,12 @@ Vocab BERT-multilingual: 119,547 tokens</div>
             bert_tok = load_bert_tokenizer()
             if bert_tok:
                 try:
-                    encoding = bert_tok(input_text, return_tensors=None, truncation=True, max_length=512)
-                    ids_bert = encoding["input_ids"]
-                    tokens_bert = bert_tok.convert_ids_to_tokens(ids_bert)
+                    encoding = bert_tok.encode(input_text)
+                    ids_bert = encoding.ids
+                    tokens_bert = encoding.tokens
                     c1, c2 = st.columns(2)
                     c1.metric("Tokens BERT", len(tokens_bert))
-                    c2.metric("Incluye [CLS]/[SEP]", "Sí")
+                    c2.metric("Incluye [CLS]/[SEP]", "Sí" if tokens_bert and tokens_bert[0] in ("[CLS]", "<s>") else "Depende del modelo")
                     st.markdown("**Tokens + IDs WordPiece:**")
                     st.markdown(render_token_chips(tokens_bert[:60], ids_bert[:60]), unsafe_allow_html=True)
                     with st.expander("Ver tabla completa de IDs"):
@@ -1087,7 +1084,7 @@ Vocab BERT-multilingual: 119,547 tokens</div>
                 except Exception as e:
                     st.error(f"Error tokenizando: {e}")
             else:
-                st.info("Cargando tokenizador BERT-multilingual... (requiere descarga inicial)")
+                st.info("Cargando tokenizador BERT-multilingual... (requiere descarga inicial del tokenizer.json, ~1-2 MB, sin PyTorch)")
 
     with tab_compare:
         st.markdown('<div class="section-title" style="font-size:1rem;">Comparativa de Tokenizadores</div>', unsafe_allow_html=True)
@@ -1096,20 +1093,14 @@ Vocab BERT-multilingual: 119,547 tokens</div>
             toks, ids_ = tokenize_with_tiktoken(input_text)
             results["BPE cl100k (ref. GPT-3.5/4)"] = {"tokens": len(toks), "vocab_size": "~100,277",
                 "algo": "Byte-Pair Encoding", "era": "2023", "ejemplo": " | ".join(toks[:8]) + "..."}
-        gpt2_tok = load_gpt2_tokenizer()
-        if gpt2_tok:
-            try:
-                enc2 = gpt2_tok(input_text, truncation=True, max_length=512)
-                toks_g = gpt2_tok.convert_ids_to_tokens(enc2["input_ids"])
-                results["BPE (GPT-2 original)"] = {"tokens": len(toks_g), "vocab_size": "50,257",
-                    "algo": "BPE byte-level", "era": "2019", "ejemplo": " | ".join(str(t) for t in toks_g[:8]) + "..."}
-            except Exception:
-                pass
+            toks_g, _ = tokenize_with_tiktoken(input_text, encoding_name="gpt2")
+            results["BPE (GPT-2 original)"] = {"tokens": len(toks_g), "vocab_size": "50,257",
+                "algo": "BPE byte-level", "era": "2019", "ejemplo": " | ".join(str(t) for t in toks_g[:8]) + "..."}
         bt = load_bert_tokenizer()
         if bt:
             try:
-                enc = bt(input_text, truncation=True, max_length=512)
-                toks_b = bt.convert_ids_to_tokens(enc["input_ids"])
+                enc = bt.encode(input_text)
+                toks_b = enc.tokens
                 results["WordPiece (BERT-multilingual)"] = {"tokens": len(toks_b), "vocab_size": "119,547",
                     "algo": "WordPiece", "era": "2018", "ejemplo": " | ".join(toks_b[:8]) + "..."}
             except Exception:
@@ -1212,8 +1203,6 @@ elif module == "📐  Embeddings & Similitud":
         📚 contexto {emb_info['context']} tokens · 💾 {emb_info['size']}
         </div>
         """, unsafe_allow_html=True)
-        if emb_info["trust_remote_code"]:
-            st.markdown('<div class="warn-box" style="font-size:0.8rem;">⚠️ Este modelo requiere <code>trust_remote_code=True</code> y el paquete <code>einops</code>.</div>', unsafe_allow_html=True)
 
         default_sents = [
             "El banco aprobó el crédito hipotecario.",
@@ -1227,11 +1216,11 @@ elif module == "📐  Embeddings & Similitud":
         sentences = [s.strip() for s in sents_input.split("\n") if s.strip()]
 
         if st.button("⚡ Calcular Embeddings", key="sbert_btn") and len(sentences) >= 2:
-            sbert = load_sbert_model(embed_choice)
-            if sbert:
-                with st.spinner("Calculando embeddings..."):
+            emb_model = load_embedding_model(embed_choice)
+            if emb_model:
+                with st.spinner("Calculando embeddings (ONNX Runtime)..."):
                     t0 = time.perf_counter()
-                    embeddings = sbert.encode(sentences, show_progress_bar=False)
+                    embeddings = embed_texts(emb_model, sentences)
                     elapsed = time.perf_counter() - t0
 
                 st.success(f"✅ {len(sentences)} embeddings de {embeddings.shape[1]} dimensiones en {elapsed:.3f}s")
@@ -1275,7 +1264,7 @@ elif module == "📐  Embeddings & Similitud":
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.error(f"No se pudo cargar {embed_choice}. Revisa que sentence-transformers (y einops si aplica) estén instalados.")
+                st.error(f"No se pudo cargar {embed_choice}. Revisa que `fastembed` esté instalado (`pip install fastembed`).")
 
     with tab_viz:
         st.markdown('<div class="section-title" style="font-size:1rem;">Proyección 2D de Embeddings (SVD)</div>', unsafe_allow_html=True)
@@ -1304,10 +1293,10 @@ elif module == "📐  Embeddings & Similitud":
 
         viz_model = st.selectbox("Modelo para la proyección:", list(EMBEDDING_MODELS.keys()), key="viz_model")
         if st.button("🗺️ Visualizar espacio semántico", key="viz_btn"):
-            sbert = load_sbert_model(viz_model)
-            if sbert and SKLEARN_AVAILABLE:
+            emb_model = load_embedding_model(viz_model)
+            if emb_model and SKLEARN_AVAILABLE:
                 with st.spinner("Calculando embeddings y proyección..."):
-                    embs = sbert.encode(all_sents)
+                    embs = embed_texts(emb_model, all_sents)
                     svd = TruncatedSVD(n_components=2, random_state=42)
                     coords = svd.fit_transform(embs)
                 df_viz = pd.DataFrame({"x": coords[:, 0], "y": coords[:, 1], "Categoría": labels,
@@ -1328,73 +1317,76 @@ elif module == "📐  Embeddings & Similitud":
                 </div>
                 """, unsafe_allow_html=True)
             else:
-                st.warning("Necesitas sentence-transformers y sklearn instalados.")
+                st.warning("Necesitas `fastembed` y `scikit-learn` instalados.")
 
 # ════════════════════════════════════════════════════════════
 # MODULE 3: MODELOS CLÁSICOS vs MODERNOS
 # ════════════════════════════════════════════════════════════
 elif module == "🕰️  Modelos Clásicos vs Modernos":
-    st.markdown('<div class="section-title">De GPT-2 (2019) a GPT-OSS (2025): la misma pregunta, dos eras</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">De GPT-2 (2019) a GPT-OSS (2025): dos eras de LLMs</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="info-box">
-    Envía el mismo prompt a un modelo <b>clásico</b> (GPT-2, ejecutado localmente en CPU, sin
-    instruction-tuning) y a un modelo <b>moderno</b> (vía Groq). El contraste es la lección:
-    escala de parámetros + RLHF + instruction-tuning son lo que separa "completar texto" de
-    "seguir instrucciones".
+    Este módulo compara la era <b>pre-instruction-tuning</b> (GPT-2, BERT — 2018/2019) con la era
+    actual de LLMs (GPT-OSS, Qwen3, LLaMA — vía Groq). La comparación de <b>generación</b> es
+    ilustrativa (no ejecuta pesos de GPT-2 en vivo — ver nota técnica abajo); la comparación de
+    <b>tokenización</b> sí es 100% en vivo con las librerías reales de cada época.
     </div>
     """, unsafe_allow_html=True)
 
-    if not TRANSFORMERS_AVAILABLE:
-        st.error("`transformers` / `torch` no están instalados. Instala con: `pip install transformers torch`")
-        st.stop()
+    rows_c = [{"Modelo": k, "Nombre": v["label"], "Año": v["year"], "Parámetros": v["params"],
+               "Tarea nativa": "Generación autoregresiva (decoder)" if v["task"] == "causal_lm" else "Codificación bidireccional (encoder)",
+               "Nota": v["note"]} for k, v in CLASSIC_MODELS.items()]
+    st.dataframe(pd.DataFrame(rows_c), use_container_width=True, height=220)
 
+    st.markdown('<div class="section-title" style="font-size:1.1rem;">🔤 Tokenización en vivo: GPT-2 (2019) vs BPE moderno</div>', unsafe_allow_html=True)
+    prompt_cm = st.text_area(
+        "Texto a tokenizar con ambos algoritmos:",
+        value="Artificial intelligence will change education because it personalizes learning at scale.",
+        height=70
+    )
+    if TIKTOKEN_AVAILABLE and prompt_cm.strip():
+        toks_old, ids_old = tokenize_with_tiktoken(prompt_cm, encoding_name="gpt2")
+        toks_new, ids_new = tokenize_with_tiktoken(prompt_cm, encoding_name="cl100k_base")
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            st.markdown(f"**GPT-2 BPE (2019, vocab 50,257)** — {len(toks_old)} tokens")
+            st.markdown(render_token_chips([t.replace('Ġ', '·') for t in toks_old[:40]], ids_old[:40]), unsafe_allow_html=True)
+        with col_t2:
+            st.markdown(f"**cl100k BPE (ref. GPT-3.5/4, vocab ~100,277)** — {len(toks_new)} tokens")
+            st.markdown(render_token_chips(toks_new[:40], ids_new[:40]), unsafe_allow_html=True)
+        st.caption("Mismo texto, mismo algoritmo (BPE) — el vocabulario más grande y mejor entrenado de la "
+                   "era moderna produce, casi siempre, menos tokens para el mismo texto.")
+
+    st.markdown('<div class="section-title" style="font-size:1.1rem;">💬 Generación: ilustrativo (GPT-2) vs en vivo (Groq)</div>', unsafe_allow_html=True)
     col_cfg1, col_cfg2 = st.columns(2)
     with col_cfg1:
-        st.markdown("### 🐣 Modelo Clásico (local)")
-        classic_choice = st.selectbox(
-            "Modelo clásico:",
-            [k for k, v in CLASSIC_MODELS.items() if v["task"] == "causal_lm"],
-            format_func=lambda k: f"{CLASSIC_MODELS[k]['label']} ({CLASSIC_MODELS[k]['params']}, {CLASSIC_MODELS[k]['year']})"
+        st.markdown("### 🐣 GPT-2 (124M, 2019) — ilustrativo")
+        st.markdown("""
+        <div class="warn-box" style="font-size:0.8rem;">
+        ⚠️ No se ejecuta inferencia real aquí: correr pesos de GPT-2 requiere PyTorch, y
+        <code>transformers</code> arrastra cientos de submódulos de visión que rompen el
+        <i>file watcher</i> de Streamlit Cloud incluso sin usarlos (ver nota al final de la página).
+        El texto de abajo es una <b>reconstrucción representativa</b> del estilo típico de GPT-2
+        con este tipo de prompt: continúa la frase de forma plausible pero divaga, pierde el hilo
+        o se repite tras pocas oraciones — no sigue instrucciones porque nunca fue entrenado para eso.
+        </div>
+        """, unsafe_allow_html=True)
+        illustrative_gpt2 = (
+            prompt_cm.strip() + " of the most important thing in the world. It is also a good way "
+            "to get a job in the future, and it is also a good way to get a job in the future. "
+            "The future of education is not the same as the future of education."
         )
-        st.caption(CLASSIC_MODELS[classic_choice]["note"])
-        classic_max_new = st.slider("max_new_tokens (clásico)", 10, 150, 60, key="classic_mt")
-        classic_temp = st.slider("temperature (clásico)", 0.1, 2.0, 0.9, 0.1, key="classic_temp")
+        st.markdown(f'<div class="llm-response" style="font-size:0.85rem;">{illustrative_gpt2}</div>', unsafe_allow_html=True)
+        st.caption("↑ Ilustrativo — nota la repetición y la falta de una respuesta real a la instrucción implícita.")
     with col_cfg2:
-        st.markdown("### 🚀 Modelo Moderno (Groq)")
+        st.markdown("### 🚀 Modelo moderno (Groq) — en vivo")
         modern_choice = st.selectbox(
             "Modelo moderno:", list(GROQ_MODELS.keys()),
             format_func=lambda m: f"{GROQ_MODELS[m]['family']} ({GROQ_MODELS[m]['params']})", key="modern_choice"
         )
-        modern_max = st.slider("max_tokens (moderno)", 50, 500, 150, key="modern_mt")
-        modern_temp = st.slider("temperature (moderno)", 0.0, 2.0, 0.7, 0.1, key="modern_temp")
-
-    prompt_cm = st.text_area(
-        "Prompt (funciona mejor en inglés para GPT-2, que fue entrenado casi exclusivamente en ese idioma):",
-        value="Artificial intelligence will change education because",
-        height=80
-    )
-
-    if st.button("⚡ Generar con ambos modelos", key="run_classic_modern", use_container_width=True) and prompt_cm.strip():
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            st.markdown(f"**{CLASSIC_MODELS[classic_choice]['label']} · {CLASSIC_MODELS[classic_choice]['params']} · {CLASSIC_MODELS[classic_choice]['year']}**")
-            with st.spinner("Generando localmente (CPU)... la primera vez descarga el modelo"):
-                gen = load_classic_causal_lm(classic_choice)
-                if gen:
-                    t0 = time.perf_counter()
-                    try:
-                        out = gen(prompt_cm, max_new_tokens=classic_max_new, do_sample=True,
-                                   temperature=classic_temp, pad_token_id=gen.tokenizer.eos_token_id)
-                        latency_c = time.perf_counter() - t0
-                        text_out = out[0]["generated_text"]
-                        st.markdown(f'<div class="llm-response" style="font-size:0.85rem;">{text_out}</div>', unsafe_allow_html=True)
-                        st.caption(f"⏱️ {latency_c:.2f}s en CPU · sin instruction-tuning · sin RLHF")
-                    except Exception as e:
-                        st.error(f"Error generando: {e}")
-                else:
-                    st.error("No se pudo cargar el modelo clásico.")
-        with col_r2:
-            st.markdown(f"**{GROQ_MODELS[modern_choice]['family']} · {GROQ_MODELS[modern_choice]['params']}**")
+        modern_max = st.slider("max_tokens", 50, 500, 150, key="modern_mt")
+        modern_temp = st.slider("temperature", 0.0, 2.0, 0.7, 0.1, key="modern_temp")
+        if st.button("⚡ Generar con el modelo moderno", key="run_modern", use_container_width=True) and prompt_cm.strip():
             if not api_key:
                 st.markdown('<div class="warn-box">⚠️ Se requiere Groq API Key en la barra lateral.</div>', unsafe_allow_html=True)
             else:
@@ -1409,45 +1401,46 @@ elif module == "🕰️  Modelos Clásicos vs Modernos":
                 else:
                     st.error(r.get("error", "Error"))
 
-        st.markdown("""
-        <div class="success-box">
-        🎓 <b>Qué observar:</b> GPT-2 tiende a divagar, repetirse o perder el hilo tras pocas
-        oraciones — está prediciendo el token más probable sin ningún concepto de "responder a una
-        instrucción". El modelo moderno entiende la intención, mantiene coherencia larga y sigue
-        un formato conversacional. La diferencia no es solo de tamaño: es de <i>paradigma de
-        entrenamiento</i> (pretraining puro vs. pretraining + SFT + RLHF).
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown("""
+    <div class="success-box">
+    🎓 <b>Qué observar:</b> GPT-2 tiende a divagar, repetirse o perder el hilo tras pocas
+    oraciones — está prediciendo el token más probable sin ningún concepto de "responder a una
+    instrucción". El modelo moderno entiende la intención, mantiene coherencia larga y sigue un
+    formato conversacional. La diferencia no es solo de tamaño: es de <i>paradigma de
+    entrenamiento</i> (pretraining puro vs. pretraining + SFT + RLHF).
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.markdown('<div class="section-title" style="font-size:1.1rem;">Encoders clásicos: BERT / RoBERTa (no generan texto)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title" style="font-size:1.1rem;">Encoders clásicos: BERT / RoBERTa (Masked Language Modeling)</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="info-box">
     BERT y RoBERTa son <b>encoder-only</b>: no completan texto de forma autoregresiva. Su tarea
-    nativa es <b>Masked Language Modeling</b> — predecir una palabra oculta usando contexto de
-    AMBOS lados. Pruébalo abajo.
+    nativa de preentrenamiento es <b>Masked Language Modeling (MLM)</b> — predecir una palabra
+    oculta usando contexto de AMBOS lados a la vez (por eso son "bidireccionales").
+    </div>
+    <div class="formula-box">P(w_mask | contexto_izq, contexto_der) = softmax(W · h_mask + b)
+
+h_mask = representación final de la posición enmascarada,
+que ya incorporó información de TODA la oración (self-attention
+sin máscara causal, a diferencia de un decoder como GPT-2/GPT-OSS)</div>
+    """, unsafe_allow_html=True)
+    mlm_text = st.text_input("Frase con un hueco a completar mentalmente:",
+                              value="La capital de Colombia es ___.")
+    st.markdown("""
+    <div class="chunk-box">
+    🧠 <b>Ejercicio guiado</b> (sin inferencia en vivo): si fueras BERT, ¿qué palabras tendrían
+    probabilidad alta para el hueco de arriba? Piensa en: (1) el tipo gramatical esperado
+    (sustantivo propio), (2) el conocimiento de mundo necesario (capitales de países),
+    (3) qué tan única es la respuesta dado el contexto. Este es exactamente el tipo de señal
+    que MLM usa para aprender representaciones — sin ninguna etiqueta humana, solo prediciendo
+    palabras ocultas en texto masivo.
     </div>
     """, unsafe_allow_html=True)
-    encoder_choice = st.selectbox(
-        "Modelo encoder:", [k for k, v in CLASSIC_MODELS.items() if v["task"] == "encoder"],
-        format_func=lambda k: f"{CLASSIC_MODELS[k]['label']} ({CLASSIC_MODELS[k]['year']})"
-    )
-    mlm_text = st.text_input("Frase con [MASK] (usa el token exacto '[MASK]'):",
-                              value="La capital de Colombia es [MASK].")
-    if st.button("🔍 Predecir token enmascarado", key="run_mlm"):
-        try:
-            from transformers import pipeline as _pipeline
-            fill = _pipeline("fill-mask", model=encoder_choice)
-            with st.spinner("Prediciendo..."):
-                preds = fill(mlm_text)
-            df_mlm = pd.DataFrame([{"Predicción": p["token_str"], "Score": round(p["score"], 4),
-                                     "Frase completa": p["sequence"]} for p in preds])
-            st.dataframe(df_mlm, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error: {e}. Prueba con un modelo BERT (RoBERTa usa <mask>, no [MASK]).")
+    st.caption("Para inferencia real de MLM (BERT/RoBERTa) fuera de este lab: `pip install transformers torch` "
+               "en un entorno separado y usa `pipeline('fill-mask', model=...)`.")
 
-# ════════════════════════════════════════════════════════════
-# MODULE 4: CHUNKING PARA RAG
+
 # ════════════════════════════════════════════════════════════
 elif module == "🧩  Chunking para RAG":
     st.markdown('<div class="section-title">Estrategias de Chunking para RAG</div>', unsafe_allow_html=True)
@@ -1519,8 +1512,8 @@ Equivalente simplificado a: RecursiveCharacterTextSplitter</div>
 4. Corta cuando el tema cambia (similitud cae)
 Equivalente conceptual a: SemanticChunker</div>
         """, unsafe_allow_html=True)
-        if not (SBERT_AVAILABLE and NLTK_AVAILABLE):
-            st.warning("Requiere sentence-transformers y NLTK instalados.")
+        if not (FASTEMBED_AVAILABLE and NLTK_AVAILABLE):
+            st.warning("Requiere `fastembed` y NLTK instalados.")
         else:
             doc_sem = st.text_area("Documento:", value=SAMPLE_TEXTS["rag_doc"].replace("#", "").replace("\n\n", " "),
                                     height=150, key="sem_doc")
@@ -1531,10 +1524,10 @@ Equivalente conceptual a: SemanticChunker</div>
                     sentences = [s.strip() for s in sent_tokenize(doc_sem) if s.strip()]
                 except Exception:
                     sentences = [s.strip() for s in doc_sem.split(".") if s.strip()]
-                sbert = load_sbert_model(sem_model)
-                if sbert and len(sentences) >= 2:
+                emb_model = load_embedding_model(sem_model)
+                if emb_model and len(sentences) >= 2:
                     with st.spinner("Calculando embeddings por oración..."):
-                        embs = sbert.encode(sentences)
+                        embs = embed_texts(emb_model, sentences)
                     chunks_sem = chunk_semantic(sentences, embs, sem_threshold)
                     st.markdown(f"**{len(chunks_sem)} chunks semánticos** (de {len(sentences)} oraciones):")
                     for i, c in enumerate(chunks_sem):
