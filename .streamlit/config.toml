@@ -1,18 +1,15 @@
 # ============================================================
-# Config de Streamlit — evita el ruido/crash aparente causado por
-# el file-watcher de Streamlit al introspeccionar los cientos de
-# submódulos "lazy" de `transformers` (incluye modelos de visión
-# como ViTMatte, ViTPose, YOLOS, ZoeDepth que requieren torchvision,
-# aunque este lab solo usa los modelos de TEXTO de transformers).
-#
-# Sin esto, cada rerun del watcher intenta importar esos submódulos
-# de visión y torchvision lanza ModuleNotFoundError repetidamente
-# en los logs — no rompe la app, pero ensucia el log y ralentiza
-# los arranques en frío.
+# Config de Streamlit — EAFIT NLP & LLM Interactive Lab
 # ============================================================
+# Con torch/torchvision/transformers fuera del proyecto, el problema
+# del file-watcher ya no debería dispararse. Se deja fileWatcherType
+# en "auto" (el valor por defecto de Streamlit) para conservar el
+# autoreload normal durante el desarrollo. Si algún día vuelves a
+# agregar una librería pesada tipo transformers y ves de nuevo el
+# error de torchvision en los logs, cambia la línea de abajo a:
+#   fileWatcherType = "none"
 [server]
-fileWatcherType = "none"
-runOnSave = false
+runOnSave = true
 
 [theme]
 base = "dark"
