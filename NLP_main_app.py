@@ -42,19 +42,19 @@ import plotly.graph_objects as go
 try:
     from groq import Groq
     GROQ_AVAILABLE = True
-except ImportError:
+except Exception:
     GROQ_AVAILABLE = False
 
 try:
     import anthropic as anthropic_sdk
     ANTHROPIC_AVAILABLE = True
-except ImportError:
+except Exception:
     ANTHROPIC_AVAILABLE = False
 
 try:
     import tiktoken
     TIKTOKEN_AVAILABLE = True
-except ImportError:
+except Exception:
     TIKTOKEN_AVAILABLE = False
 
 try:
@@ -71,7 +71,7 @@ try:
         except Exception:
             pass
     NLTK_AVAILABLE = True
-except ImportError:
+except Exception:
     NLTK_AVAILABLE = False
 
 try:
@@ -79,19 +79,19 @@ try:
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.decomposition import TruncatedSVD
     SKLEARN_AVAILABLE = True
-except ImportError:
+except Exception:
     SKLEARN_AVAILABLE = False
 
 try:
     from sentence_transformers import SentenceTransformer
     SBERT_AVAILABLE = True
-except ImportError:
+except Exception:
     SBERT_AVAILABLE = False
 
 try:
     from transformers import AutoTokenizer, pipeline
     TRANSFORMERS_AVAILABLE = True
-except ImportError:
+except Exception:
     TRANSFORMERS_AVAILABLE = False
 
 # ════════════════════════════════════════════════════════════
@@ -129,7 +129,23 @@ st.markdown("""
     --teal:       #39d353;
 }
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; background-color: var(--bg); color: var(--text); }
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+/* IMPORTANTE: no ocultar todo el <header> — ahí vive el botón que abre/cierra
+   la barra lateral. Solo lo hacemos transparente y forzamos que el control
+   de colapso sea siempre visible y con buen contraste sobre el fondo oscuro. */
+header[data-testid="stHeader"] { background: transparent; box-shadow: none; visibility: visible; }
+button[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] {
+    visibility: visible !important;
+    display: flex !important;
+    opacity: 1 !important;
+}
+button[data-testid="collapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] svg {
+    fill: var(--accent) !important;
+    color: var(--accent) !important;
+}
 .block-container { padding-top: 1rem; max-width: 100%; }
 .lab-header {
     background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1f2e 100%);
