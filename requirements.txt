@@ -35,9 +35,11 @@ einops>=0.7                  # requerido por nomic-embed-text (trust_remote_code
 # --- Modelos clásicos locales (GPT-2, BERT, RoBERTa) ---
 transformers>=4.44,<5.0
 torch>=2.2,<3.0              # backend CPU para transformers/sentence-transformers
-torchvision>=0.17,<1.0       # requerido transitivamente por transformers/sentence-transformers
-                              # incluso para pipelines de solo texto (evita
-                              # "ModuleNotFoundError: No module named 'torchvision'")
+# NOTA: NO se necesita torchvision — este lab solo usa modelos de TEXTO
+# (GPT-2, BERT, RoBERTa). El ModuleNotFoundError de torchvision que puede
+# verse en los logs viene del file-watcher de Streamlit, no de la app en
+# sí; se resuelve con .streamlit/config.toml (fileWatcherType = "none"),
+# incluido en este proyecto.
 
 # ============================================================
 # NOTAS:
