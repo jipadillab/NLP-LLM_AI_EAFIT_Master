@@ -1,54 +1,49 @@
 # ============================================================
-# EAFIT — Maestría en Ciencia de Datos
-# NLP & LLM Interactive Lab — requirements.txt
-# Prof. Jorge Iván Padilla-Buriticá
+# NLP & LLM Interactive Lab — EAFIT
+# requirements.txt
 # ============================================================
+# Instalación local:   pip install -r requirements.txt
+# Streamlit Cloud:      sube este archivo junto a main_app.py
 
-# --- Core App ---
-streamlit
-streamlit-extras         # Additional Streamlit components
+# --- Core app ---
+streamlit>=1.38,<2.0
+pandas>=2.0,<3.0
+numpy>=1.26,<2.0
 
-# --- LLM API ---
-groq>                 # Groq API client (LLaMA, Mistral, Gemma, etc.)
-openai                  # OpenAI-compatible client (optional comparison)
-tiktoken               # Tokenizer counter (GPT-compatible BPE)
+# --- Visualización ---
+plotly>=5.20,<6.0
 
-# --- NLP Classical & Embeddings ---
-nltk                 # Tokenization, POS tagging, stopwords, n-grams
-spacy                  # Industrial NLP: NER, dependency parsing
-sentence-transformers    # Contextual embeddings (SBERT)
-scikit-learn            # TF-IDF, cosine similarity, clustering, metrics
-gensim               # Word2Vec, GloVe loading, FastText
+# --- Groq API (modelos modernos: GPT-OSS, Qwen3, LLaMA, DeepSeek — todos gratis) ---
+groq>=0.11,<1.0
 
-# --- Text Processing ---
-textblob            # Sentiment analysis, language detection
-langdetect              # Language detection
-regex               # Advanced regex patterns
-chardet                 # Character encoding detection
+# --- Anthropic (Claude) — OPCIONAL, solo para el módulo Comparador ---
+# NOTA: Anthropic no tiene tier gratuito de API (a diferencia de Groq).
+# Si no vas a usar Claude, puedes omitir este paquete sin romper el resto de la app.
+anthropic>=0.34,<1.0
 
-# --- Tokenization Visualization ---
-tokenizers            # HuggingFace tokenizers (BPE, WordPiece, etc.)
-transformers          # BERT, GPT-2 models & tokenizers
+# --- Tokenización ---
+tiktoken>=0.7,<1.0          # BPE (cl100k, referencia GPT-3.5/4)
 
-# --- Visualization ---
-plotly               # Interactive charts, heatmaps, scatter plots
-matplotlib              # Classic plotting
-seaborn               # Statistical visualizations
-wordcloud>                # Word cloud generation
-networkx                 # Graph visualization for attention / knowledge graphs
+# --- NLP clásico ---
+nltk>=3.9,<4.0               # POS, NER, VADER sentiment, n-gramas
 
-# --- Data ---
-pandas                 # DataFrames for results comparison
-numpy                   # Numerical operations on embeddings
+# --- Embeddings, TF-IDF y proyecciones ---
+scikit-learn>=1.4,<2.0       # TF-IDF, cosine_similarity, TruncatedSVD (PCA-like)
+sentence-transformers>=3.0,<4.0   # all-MiniLM-L6-v2 / bge-m3 / nomic-embed-text
+einops>=0.7                  # requerido por nomic-embed-text (trust_remote_code)
 
-# --- Utilities ---
-python-dotenv            # Load .env API keys
-requests              # HTTP calls
-tqdm                  # Progress bars
-Pillow                  # Image processing (word clouds)
-pyperclip              # Clipboard copy for prompts
+# --- Modelos clásicos locales (GPT-2, BERT, RoBERTa) ---
+transformers>=4.44,<5.0
+torch>=2.2,<3.0              # backend CPU para transformers/sentence-transformers
 
-# --- Optional: spaCy Spanish model (run after install) ---
-# python -m spacy download es_core_news_sm
-# python -m spacy download en_core_web_sm
-# python -m nltk.downloader all
+# ============================================================
+# NOTAS:
+# - torch se instala en versión CPU por defecto desde PyPI; en
+#   Streamlit Community Cloud esto es lo esperado (no hay GPU).
+# - bge-m3 y nomic-embed-text se descargan la primera vez que se
+#   usan (cientos de MB a ~2GB) — ten paciencia en la demo en vivo,
+#   o pre-descárgalos antes de clase.
+# - Si vas a desplegar solo el subconjunto de módulos que usan Groq
+#   (sin modelos clásicos locales), puedes omitir `torch` y
+#   `transformers` y comentar el módulo "Modelos Clásicos vs Modernos".
+# ============================================================
